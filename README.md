@@ -69,8 +69,45 @@ Login: `POST /api/auth/login`. En la demo también vale el header
 
 Datos semilla: 4 estudios (Ultrasonido abdominal $850, Perfil tiroideo $620,
 Radiografía tórax $450, Análisis sangre $380) y 2 clínicas (Clínica Puebla
-Centro, Clínica Salud Digna Tehuacán). Hay un trámite demo de Ana en estado
-COTIZADO (folio `SD-2026-0001`) para que el journey no llegue vacío.
+Centro, Clínica Salud Digna Tehuacán).
+
+## Usuarios ejemplo (5, en la BD de Postgres y en el mock)
+
+| # | Paciente | Teléfono | Nac. | Estudio | Estado |
+|---|---|---|---|---|---|
+| 1 | Ana García López | +52 222 000 0001 | 1990-05-14 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
+| 2 | Luis Hernández Torres | +52 222 111 2233 | 1985-03-22 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
+| 3 | María Fernanda Ruiz | +52 222 444 5566 | 1992-08-09 | Radiografía tórax $450 | CONFIRMADO (cita 2026-11-24 10:00) |
+| 4 | Carlos Mendoza Vega | +52 238 777 8899 | 1978-11-30 | Análisis sangre $380 | ATENDIDO |
+| 5 | Fernanda López Díaz | +52 222 999 0011 | 2001-06-17 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
+
+Se siembran con Flyway `V2__seed.sql` + `V3__usuarios_ejemplo.sql` y con
+`DataSeeder` (idempotente, crea el trámite de cada uno en su estado).
+Si ya tenías la base creada, basta con `docker compose down -v` y volver
+a levantar para que Flyway aplique V3, o simplemente reinicia el backend:
+`DataSeeder` crea los pacientes/trámites que falten en cada arranque.
+
+## Si ves "Modo demo sin backend"
+
+Ese banner sale cuando el front no llega a `http://localhost:8080/api`.
+El front ahora reintenta cada 5 s y tiene botón "Reintentar conexión",
+pero si el backend no está arriba, seguirá en mock. Diagnóstico en una
+terminal nueva, dentro de la carpeta del proyecto:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 backend
+docker compose logs --tail=50 db
+curl http://localhost:8080/api/health
+# En PowerShell, si no tienes curl: Invoke-RestMethod http://localhost:8080/api/health
+```
+
+- Si `backend` está en `Restarting` o `Exited`, el error está en sus logs.
+- Si `db` no está `healthy`, el backend no arranca hasta que Postgres esté listo.
+- Si `curl` responde `{"status":"UP"}`, el backend sí está vivo y el banner
+  debe desaparecer solo en unos segundos (o pulsa Reintentar).
+- Si el puerto 8080 ya está ocupado por otro programa, el backend no puede
+  arrancar: para ese programa o cambia el puerto en `docker-compose.yml`.
 
 ## Demo de Ana en 5 pasos
 

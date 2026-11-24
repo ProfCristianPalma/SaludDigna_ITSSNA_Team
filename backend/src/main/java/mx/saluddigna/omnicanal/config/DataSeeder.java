@@ -2,7 +2,9 @@ package mx.saluddigna.omnicanal.config;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import mx.saluddigna.omnicanal.catalogo.ClinicaRepository;
 import mx.saluddigna.omnicanal.catalogo.EstudioRepository;
 import mx.saluddigna.omnicanal.catalogo.domain.Clinica;
@@ -18,9 +20,17 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Siembra demo, idempotente por tabla: si V2__seed.sql ya cargo el
- * catalogo y a Ana (perfil Postgres), aqui solo falta el tramite demo.
+ * Siembra demo, idempotente: si V2/V3 ya cargaron el catalogo y a los
+ * pacientes (perfil Postgres), aqui solo faltan los tramites.
  * Si la base esta vacia (perfil H2), siembra todo.
+ *
+ * 5 usuarios ejemplo, cada uno en un estado distinto del flujo,
+ * para que el asesor, WhatsApp y el Journey tengan casos que mostrar:
+ * - Ana Garcia Lopez      +52 222 000 0001  COTIZADO
+ * - Luis Hernandez Torres +52 222 111 2233  CLINICA_SELECCIONADA
+ * - Maria Fernanda Ruiz   +52 222 444 5566  CONFIRMADO (cita 2026-11-24 10:00)
+ * - Carlos Mendoza Vega   +52 238 777 8899  ATENDIDO
+ * - Fernanda Lopez Diaz   +52 222 999 0011  DATOS_PENDIENTES
  */
 @Component
 public class DataSeeder implements CommandLineRunner {
@@ -57,20 +67,75 @@ public class DataSeeder implements CommandLineRunner {
                     new Clinica("Clinica Salud Digna Tehuacan", "Tehuacan", "Calle 5 Sur 45", "+52 238 000 0000")));
         }
 
-        Paciente ana = pacientes.findByTelefono("+52 222 000 0001")
-                .orElseGet(() -> pacientes.save(new Paciente(
-                        "Ana Garcia Lopez", "+52 222 000 0001", "ana.demo@saluddigna.test",
-                        LocalDate.of(1990, 5, 14))));
+        Estudio ultrasonido = estudioPorNombre("Ultrasonido");
+        Estudio tiroideo = estudioPorNombre("Perfil tiroideo");
+        Estudio radiografia = estudioPorNombre("Radiografia");
+        Estudio analisis = estudioPorNombre("Analisis");
+        Clinica puebla = clinicaPorNombre("Puebla");
+        Clinica tehuacan = clinicaPorNombre("Tehuacan");
 
-        // Tramite demo de Ana en COTIZADO, creado por el servicio para que
-        // el log de eventos quede completo (tramite.iniciado + cotizacion.creada).
-        if (tramites.findByPacienteIdOrderByCreatedAtDesc(ana.getId()).isEmpty()) {
-            Estudio ultrasonido = estudios.findAll().stream()
-                    .filter(e -> e.getNombre().contains("Ultrasonido"))
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException("Falta el estudio Ultrasonido abdominal en el seed"));
-            Tramite demo = tramiteService.crearTramite(ana.getId(), ultrasonido.getId(), Canal.WEB.name());
-            tramiteService.cotizar(demo.getId(), ultrasonido.getId());
+        // 1. Ana — COTIZADO
+        Paciente ana = paciente("Ana Garcia Lopez", "+52 222 000 0001", "ana.demo@saluddigna.test", LocalDate.of(1990, 5, 14));
+        tramiteCotizado(ana, ultrasonido);
+
+        // 2. Luis — CLINICA_SELECCIONADA
+        Paciente luis = paciente("Luis Hernandez Torres", "+52 222 111 2233", "luis.demo@saluddigna.test", LocalDate.of(1985, 3, 22));
+        Tramite tLuis = tramiteCotizado(luis, tiroideo);
+        if (tLuis != null && tLuis.getEstado().name().equals("COTIZADO")) {
+            tramiteService.seleccionarClinica(tLuis.getId(), puebla.getId());
         }
+
+        // 3. Maria — CONFIRMADO
+        Paciente maria = paciente("Maria Fernanda Ruiz", "+52 222 444 5566", "maria.demo@saluddigna.test", LocalDate.of(1992, 8, 9));
+        Tramite tMaria = tramiteCotizado(maria, radiografia);
+        if (tMaria != null && tMaria.getEstado().name().equals("COTIZADO")) {
+            tramiteService.seleccionarClinica(tMaria.getId(), tehuacan.getId());
+            tramiteService.confirmar(tMaria.getId(), LocalDateTime.of(2026, 11, 24, 10, 0));
+        }
+
+        // 4. Carlos — ATENDIDO
+        Paciente carlos = paciente("Carlos Mendoza Vega", "+52 238 777 8899", "carlos.demo@saluddigna.test", LocalDate.of(1978, 11, 30));
+        Tramite tCarlos = tramiteCotizado(carlos, analisis);
+        if (tCarlos != null && tCarlos.getEstado().name().equals("COTIZADO")) {
+            tramiteService.seleccionarClinica(tCarlos.getId(), puebla.getId());
+            tramiteService.confirmar(tCarlos.getId(), LocalDateTime.of(2026, 11, 23, 9, 0));
+            tramiteService.concluirAtencion(tCarlos.getId());
+        }
+
+        // 5. Fernanda — DATOS_PENDIENTES
+        Paciente fernanda = paciente("Fernanda Lopez Diaz", "+52 222 999 0011", "fernanda.demo@saluddigna.test", LocalDate.of(2001, 6, 17));
+        if (tramites.findByPacienteIdOrderByCreatedAtDesc(fernanda.getId()).isEmpty()) {
+            Tramite t = tramiteService.crearTramite(fernanda.getId(), null, Canal.WEB.name());
+            tramiteService.marcarDatosPendientes(t.getId(), Map.of("curp", "Pendiente: CURP", "ordenMedica", "Pendiente: orden medica"));
+        }
+    }
+
+    private Paciente paciente(String nombre, String telefono, String email, LocalDate fechaNacimiento) {
+        return pacientes.findByTelefono(telefono)
+                .orElseGet(() -> pacientes.save(new Paciente(nombre, telefono, email, fechaNacimiento)));
+    }
+
+    private Estudio estudioPorNombre(String fragmento) {
+        return estudios.findAll().stream()
+                .filter(e -> e.getNombre().contains(fragmento))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Falta el estudio " + fragmento + " en el seed"));
+    }
+
+    private Clinica clinicaPorNombre(String fragmento) {
+        return clinicas.findAll().stream()
+                .filter(c -> c.getNombre().contains(fragmento))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Falta la clinica " + fragmento + " en el seed"));
+    }
+
+    /** Crea el tramite de un paciente y lo deja COTIZADO, o devuelve el existente. */
+    private Tramite tramiteCotizado(Paciente paciente, Estudio estudio) {
+        List<Tramite> existentes = tramites.findByPacienteIdOrderByCreatedAtDesc(paciente.getId());
+        if (!existentes.isEmpty()) {
+            return existentes.get(0);
+        }
+        Tramite demo = tramiteService.crearTramite(paciente.getId(), estudio.getId(), Canal.WEB.name());
+        return tramiteService.cotizar(demo.getId(), estudio.getId());
     }
 }

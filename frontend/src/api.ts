@@ -1,4 +1,4 @@
-import { MOCK_CLINICAS, MOCK_ESTUDIOS, MOCK_PACIENTE_ANA, mockTimeline, mockTramite } from './mock';
+import { MOCK_CLINICAS, MOCK_ESTUDIOS, MOCK_PACIENTE_ANA, mockTimeline, mockTramite, mockTramiteParaTelefono } from './mock';
 import type { Clinica, Estudio, Evento, Journey, Paciente, Tramite } from './types';
 
 export const API_BASE = 'http://localhost:8080/api';
@@ -8,6 +8,18 @@ export let isMock = false;
 
 export function isMockMode(): boolean {
   return isMock;
+}
+
+/** ¿El backend está vivo? Usa /api/health, sin marcar mock si falla. */
+export async function checkBackend(): Promise<boolean> {
+  try {
+    await fetchJson<{ status: string }>('/health', undefined, 3000);
+    markLive();
+    return true;
+  } catch {
+    markMock();
+    return false;
+  }
 }
 
 function markMock(): void {
@@ -108,7 +120,13 @@ function normalizarTexto(s: string): string {
 // memoria y avanza de estado igual que el backend.
 let mockWaTramite: Tramite | null = null;
 
-function getMockWaTramite(): Tramite {
+function getMockWaTramite(telefono?: string): Tramite {
+  if (telefono) {
+    const paraTelefono = mockTramiteParaTelefono(telefono);
+    if (paraTelefono && (!mockWaTramite || mockWaTramite.paciente?.telefono !== telefono)) {
+      mockWaTramite = { ...paraTelefono, estudio: { ...paraTelefono.estudio }, datosPendientes: [...paraTelefono.datosPendientes] };
+    }
+  }
   if (!mockWaTramite) {
     const t = mockTramite();
     mockWaTramite = { ...t, estudio: { ...t.estudio }, clinica: null, datosPendientes: [...t.datosPendientes] };
@@ -116,8 +134,9 @@ function getMockWaTramite(): Tramite {
   return mockWaTramite;
 }
 
-function mockWhatsappRespuesta(mensaje: string): { respuesta: string; tramite: Tramite } {
-  const t = getMockWaTramite();
+function mockWhatsappRespuesta(mensaje: string, telefono?: string): { respuesta: string; tramite: Tramite } {
+  const t = getMockWaTramite(telefono);
+  const nombre = t.paciente?.nombre.split(' ')[0] ?? 'Hola';
   const norm = normalizarTexto(mensaje);
 
   if (t.estado === 'COTIZADO') {
@@ -126,7 +145,7 @@ function mockWhatsappRespuesta(mensaje: string): { respuesta: string; tramite: T
       t.estado = 'CLINICA_SELECCIONADA';
       return {
         tramite: t,
-        respuesta: `Listo Ana, elegiste ${t.clinica.nombre} para tu trámite ${t.folio}. Ahora dime qué día prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).`,
+        respuesta: `Listo ${nombre}, elegiste ${t.clinica.nombre} para tu trámite ${t.folio}. Ahora dime qué día prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).`,
       };
     }
     if (norm === '2' || norm.includes('tehuacan')) {
@@ -134,18 +153,18 @@ function mockWhatsappRespuesta(mensaje: string): { respuesta: string; tramite: T
       t.estado = 'CLINICA_SELECCIONADA';
       return {
         tramite: t,
-        respuesta: `Listo Ana, elegiste ${t.clinica.nombre} para tu trámite ${t.folio}. Ahora dime qué día prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).`,
+        respuesta: `Listo ${nombre}, elegiste ${t.clinica.nombre} para tu trámite ${t.folio}. Ahora dime qué día prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).`,
       };
     }
     if (norm.includes('si') || norm.includes('quiero') || norm.includes('elegir') || norm.includes('clinica') || norm.includes('continuar')) {
       return {
         tramite: t,
-        respuesta: `Perfecto Ana, continuamos tu trámite ${t.folio}. Elige una clínica respondiendo con el número:\n1) Clínica Puebla Centro (Puebla)\n2) Clínica Salud Digna Tehuacán (Tehuacán)\nResponde 1 o 2.`,
+        respuesta: `Perfecto ${nombre}, continuamos tu trámite ${t.folio}. Elige una clínica respondiendo con el número:\n1) Clínica Puebla Centro (Puebla)\n2) Clínica Salud Digna Tehuacán (Tehuacán)\nResponde 1 o 2.`,
       };
     }
     return {
       tramite: t,
-      respuesta: `Hola Ana 👋. Encontré tu trámite pendiente ${t.folio}: ${t.estudio.nombre} por $${t.precioCotizado} (estado: ${t.estado}). ¿Quieres continuar y elegir clínica?`,
+      respuesta: `Hola ${nombre} 👋. Encontré tu trámite pendiente ${t.folio}: ${t.estudio.nombre} por $${t.precioCotizado} (estado: ${t.estado}). ¿Quieres continuar y elegir clínica?`,
     };
   }
 
@@ -156,7 +175,7 @@ function mockWhatsappRespuesta(mensaje: string): { respuesta: string; tramite: T
       t.estado = 'CONFIRMADO';
       return {
         tramite: t,
-        respuesta: `Confirmado Ana. Tu cita del trámite ${t.folio} quedó para el ${m[1]}-${m[2]}-${m[3]} a las 10:00 en ${t.clinica?.nombre ?? ''}. Te esperamos.`,
+        respuesta: `Confirmado ${nombre}. Tu cita del trámite ${t.folio} quedó para el ${m[1]}-${m[2]}-${m[3]} a las 10:00 en ${t.clinica?.nombre ?? ''}. Te esperamos.`,
       };
     }
     return {
@@ -166,12 +185,12 @@ function mockWhatsappRespuesta(mensaje: string): { respuesta: string; tramite: T
   }
 
   if (t.estado === 'CONFIRMADO') {
-    return { tramite: t, respuesta: `Hola Ana, tu cita del trámite ${t.folio} está confirmada para el ${t.fechaCita}. Te esperamos.` };
+    return { tramite: t, respuesta: `Hola ${nombre}, tu cita del trámite ${t.folio} está confirmada para el ${t.fechaCita}. Te esperamos.` };
   }
 
   return {
     tramite: t,
-    respuesta: `Hola Ana 👋. Tu trámite ${t.folio} está en estado ${t.estado}.`,
+    respuesta: `Hola ${nombre} 👋. Tu trámite ${t.folio} está en estado ${t.estado}.`,
   };
 }
 
@@ -358,15 +377,14 @@ export async function enviarWhatsapp(
     };
   } catch {
     markMock();
-    const limpio = telefono.replace(/\D/g, '');
-    const esAna = limpio === '522220000001' || limpio === '2220000001' || telefono.includes('222 000 0001');
-    if (!esAna) {
+    const tramiteMock = mockTramiteParaTelefono(telefono);
+    if (!tramiteMock) {
       return {
         tramite: null,
         respuesta: 'Hola. No encontré un trámite con ese teléfono. ¿Me compartes tu folio (por ejemplo SD-2026-0001) o el estudio que necesitas?',
       };
     }
-    return mockWhatsappRespuesta(mensaje);
+    return mockWhatsappRespuesta(mensaje, telefono);
   }
 }
 

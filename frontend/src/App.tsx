@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes } from 'react-router-dom';
-import { getEstudios, isMockMode } from './api';
+import { checkBackend } from './api';
 import AppPage from './pages/AppPage';
 import AsesorPage from './pages/AsesorPage';
 import ClinicaPage from './pages/ClinicaPage';
@@ -11,11 +11,28 @@ import WhatsappPage from './pages/WhatsappPage';
 export default function App() {
   const [mock, setMock] = useState(false);
 
+  // Antes esto se chequeaba UNA sola vez al cargar: si el backend aún
+  // estaba arrancando (Docker tarda 30-60 s la primera vez), el banner
+  // "Modo demo sin backend" quedaba fijo aunque el backend ya estuviera
+  // arriba. Ahora reintenta cada 5 s hasta que responde.
   useEffect(() => {
-    getEstudios()
-      .then(() => setMock(isMockMode()))
-      .catch(() => setMock(true));
+    let cancelado = false;
+    async function chequear() {
+      const vivo = await checkBackend();
+      if (!cancelado) setMock(!vivo);
+    }
+    chequear();
+    const id = window.setInterval(chequear, 5000);
+    return () => {
+      cancelado = true;
+      window.clearInterval(id);
+    };
   }, []);
+
+  async function reintentar() {
+    const vivo = await checkBackend();
+    setMock(!vivo);
+  }
 
   return (
     <div className="app-shell">
@@ -40,6 +57,10 @@ export default function App() {
       {mock && (
         <div className="mock-banner" role="status">
           Modo demo sin backend — mostrando datos locales. El backend en http://localhost:8080/api no respondió.
+          {' '}
+          <button type="button" className="btn btn-secondary" onClick={reintentar} style={{ marginLeft: 8 }}>
+            Reintentar conexión
+          </button>
         </div>
       )}
 
