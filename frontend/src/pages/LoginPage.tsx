@@ -32,7 +32,7 @@ export default function LoginPage() {
   return (
     <div>
       <h1>Iniciar sesión</h1>
-      <p className="muted">Entra con tu teléfono (o tu primer nombre) y tu contraseña. La sesión se guarda en este navegador.</p>
+      <p className="muted">Entra con tu teléfono (o tu primer nombre) y tu contraseña. La sesión dura lo que dura esta pestaña: al cerrarla se cierra sola y la app arranca limpia, sin usuario cargado.</p>
 
       <section className="card" style={{ maxWidth: 480 }}>
         <form onSubmit={handleSubmit} className="form">

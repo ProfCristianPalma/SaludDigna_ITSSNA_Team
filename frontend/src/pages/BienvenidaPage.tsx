@@ -1,17 +1,27 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { getPerfilYo, getToken } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
+import { getPerfilYo, getToken, logout } from '../api';
 import type { PerfilYo } from '../api';
 
 // Página de inicio: bienvenida a Salud Digna y mapa de canales.
 // La Web de cotizar vive en /cotizar (con alias /web); aquí solo se presenta.
+// "Iniciar sesión" y "Crear cuenta" están SIEMPRE visibles: la sesión
+// vive en sessionStorage y al cerrar el navegador la app arranca limpia,
+// sin ningún usuario cargado.
 export default function BienvenidaPage() {
   const [sesion, setSesion] = useState<PerfilYo | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!getToken()) return;
     getPerfilYo().then(setSesion).catch(() => setSesion(null));
   }, []);
+
+  function cerrarSesion() {
+    logout();
+    setSesion(null);
+    navigate('/');
+  }
 
   const nombre = sesion?.paciente?.nombre.split(' ')[0] ?? sesion?.usuario ?? null;
 
@@ -24,20 +34,23 @@ export default function BienvenidaPage() {
           y continúa en cualquier otro sin repetir tus datos: tu folio te sigue a la Web,
           WhatsApp, el Call Center, la App y la Clínica.
         </p>
-        {nombre ? (
-          <>
-            <p>Hola, <strong>{nombre}</strong> 👋</p>
-            <div className="actions">
-              <Link className="btn btn-primary" to="/app">Ir a mi App</Link>
-              <Link className="btn btn-secondary" to="/historial">Ver mi historial</Link>
-              <Link className="btn btn-secondary" to="/cotizar">Cotizar un estudio</Link>
-            </div>
-          </>
-        ) : (
-          <div className="actions">
-            <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
-            <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
-            <Link className="btn btn-secondary" to="/cotizar">Cotizar un estudio</Link>
+        {nombre && (
+          <p>
+            Sesión activa: Hola, <strong>{nombre}</strong> 👋
+          </p>
+        )}
+        <div className="actions">
+          <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
+          <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
+          <Link className="btn btn-secondary" to="/cotizar">Cotizar un estudio</Link>
+        </div>
+        {nombre && (
+          <div className="actions" style={{ marginTop: 12 }}>
+            <Link className="btn btn-primary" to="/app">Continuar como {nombre}</Link>
+            <Link className="btn btn-secondary" to="/historial">Ver mi historial</Link>
+            <button type="button" className="btn btn-secondary" onClick={cerrarSesion}>
+              Cerrar sesión
+            </button>
           </div>
         )}
       </section>

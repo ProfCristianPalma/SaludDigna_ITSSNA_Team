@@ -92,6 +92,7 @@ La app arranca en `/` (Bienvenida). Desde ahí se va a todo lo demás:
 | `/asesor` | Call Center | Consola del asesor (busca por teléfono, folio o nombre) |
 | `/clinica` | Clínica | Recepción: citas confirmadas de TODOS los pacientes |
 | `/journey` | Journey | Tu recorrido paso a paso, en tiempo real |
+| `/admin/usuarios` | Administración de usuarios | **Solo por URL** (sin botón ni enlace): listado de usuarios con CRUD real contra Postgres |
 
 Login y Registro son ventanas separadas y se puede navegar entre ellas
 y al inicio: Login tiene "Crear cuenta" y "Volver a inicio"; Registro
@@ -138,9 +139,14 @@ paciente logueado, y solo se ven **sus** folios.
   usuario inexistente → 401. Devuelve `{token, usuario, rol, paciente?}`.
 - **Sesión:** `GET /api/auth/yo` con header `Authorization: Bearer <token>`
   devuelve `{paciente, usuario, rol}`. El front guarda el token en
-  `localStorage` (`saluddigna-token`) y lo manda en cada llamada; al
-  recargar, la sesión se restaura llamando a `/auth/yo`. "Cerrar sesión"
-  borra el token y vuelve a `/login`.
+  **`sessionStorage`** (`saluddigna-token`) y lo manda en cada llamada.
+  La sesión dura lo que dura la pestaña: al cerrarla o abrir una pestaña
+  nueva, la app arranca limpia, sin ningún usuario cargado. "Iniciar
+  sesión" y "Crear cuenta" están siempre visibles en la barra y en la
+  bienvenida; con sesión activa aparece además "Continuar como {nombre}"
+  y un botón **Cerrar sesión** bien visible (en la barra, en la
+  bienvenida y en la App). "Cerrar sesión" borra el token (y cualquier
+  resto viejo en `localStorage`) y vuelve a `/`.
 - **Contraseñas:** se guardan como hash **PBKDF2WithHmacSHA256** (salt
   aleatorio de 16 bytes, 65536 iteraciones, 256 bits) en
   `pacientes.password_hash` (migración Flyway `V4__password_pacientes.sql`,
@@ -162,6 +168,49 @@ paciente logueado, y solo se ven **sus** folios.
 Datos semilla: 4 estudios (Ultrasonido abdominal $850, Perfil tiroideo $620,
 Radiografía tórax $450, Análisis sangre $380) y 2 clínicas (Clínica Puebla
 Centro, Clínica Salud Digna Tehuacán).
+
+## Persistencia: nada volátil
+
+Usuarios y folios viven en **Postgres** (volumen Docker `pgdata` en
+`docker-compose.yml`): sobreviven a reinicios del backend y a
+`docker compose down` normal. **Solo `docker compose down -v` borra la
+base de datos** (borra el volumen). El registro guarda al paciente en
+la BD con su hash PBKDF2, y cada folio es un trámite en la BD: nada se
+guarda solo en el navegador ni en un mapa en memoria.
+
+Si el backend no responde, las escrituras (cotizar, crear folio,
+elegir clínica, confirmar, WhatsApp, completar dato, atender) **no
+inventan datos**: lanzan el error y la página avisa que no se creó ni
+se guardó nada. Lo mismo en las lecturas de Historial, Journey,
+Clínica y pacientes: muestran el error real, no datos de ejemplo. Solo
+el catálogo (estudios y clínicas) sigue mostrando datos locales con el
+banner "Modo demo sin backend" mientras el backend no responde.
+
+## Administración de usuarios (solo por URL)
+
+`/admin/usuarios` es una herramienta demo de administración: **solo se
+entra escribiendo la URL**, no hay botón, no hay enlace desde ninguna
+página y no se menciona en la bienvenida. Tampoco tiene gate de auth
+extra (el resto del demo tampoco lo tiene).
+
+- **Lista:** todos los usuarios de Postgres con su cantidad de folios,
+  buscador por nombre o teléfono.
+- **Crear:** nombre, teléfono (se normaliza a 10 dígitos), email, fecha
+  de nacimiento y contraseña (mínimo 6, hash PBKDF2). 409 si el teléfono
+  ya existe.
+- **Editar:** nombre, teléfono, email y fecha; la contraseña solo se
+  cambia si se escribe una nueva. 409 si el teléfono choca con otro usuario.
+- **Borrar:** con confirmación que dice cuántos folios se borrarán.
+  Borra en cascada y en la misma transacción al usuario, sus folios
+  (trámites), sus citas y sus eventos: `tramites.paciente_id` es una FK
+  sin `ON DELETE CASCADE` y `citas.tramite_id` también referencia a
+  `tramites`, así que borrar a secas fallaría por violación de FK; y los
+  eventos de esos trámites quedarían huérfanos (su `tramite_id` no tiene
+  FK). Si algo falla, todo se revierte.
+
+Endpoints: `GET /api/admin/usuarios`, `POST /api/admin/usuarios`,
+`PUT /api/admin/usuarios/{id}`, `DELETE /api/admin/usuarios/{id}`
+(responde `{"foliosEliminados": N}`).
 
 ## Usuarios ejemplo (5, en la BD de Postgres y en el mock)
 
@@ -263,18 +312,20 @@ leen y escriben sobre los mismos trámites.
 Si hay sesión, `/whatsapp` arranca con EL paciente logueado: su nombre,
 su teléfono (10 dígitos) y sus folios activos, con botón por folio para
 seguir con ese trámite. "Abrir WhatsApp" desde App guarda el teléfono
-de sesión en `localStorage` (`saluddigna-wa-telefono`); "Continuar en
+de sesión en `sessionStorage` (`saluddigna-wa-telefono`); "Continuar en
 WhatsApp" desde Historial guarda además el folio
-(`saluddigna-wa-folio`) y el bot continúa con ese folio. Sin sesión,
-WhatsApp sigue con Ana de ejemplo como antes. La máquina de estados
+(`saluddigna-wa-folio`). Sin sesión, WhatsApp arranca con el teléfono
+vacío: hay que escribirlo o iniciar sesión. La máquina de estados
 del bot no cambió.
 
 ## Si ves "Modo demo sin backend"
 
 Ese banner sale cuando el front no llega a `http://localhost:8080/api`.
-El front ahora reintenta cada 5 s y tiene botón "Reintentar conexión",
-pero si el backend no está arriba, seguirá en mock. Diagnóstico en una
-terminal nueva, dentro de la carpeta del proyecto:
+El front ahora reintenta cada 5 s y tiene botón "Reintentar conexión".
+Mientras el backend no responda, solo el catálogo (estudios y clínicas)
+muestra datos locales; las escrituras y las lecturas de Historial,
+Journey, Clínica y pacientes muestran el error y no inventan datos.
+Diagnóstico en una terminal nueva, dentro de la carpeta del proyecto:
 
 ```bash
 docker compose ps
@@ -296,9 +347,11 @@ curl http://localhost:8080/api/health
 1. **Web** (`/cotizar`): como Ana, cotiza el Ultrasonido abdominal ($850), elige
    Clínica Puebla Centro y pulsa "Cerrar sin confirmar (simular interrupción)".
    Anota el folio `SD-2026-0001`.
-2. **WhatsApp** (`/whatsapp`): escribe "quiero continuar mi trámite". El bot
-   reconoce a Ana por su teléfono, recupera el trámite pendiente y le ofrece
-   seguir donde se quedó. El evento `canal.cambiado` queda en el log.
+2. **WhatsApp** (`/whatsapp`): escribe el teléfono de Ana `2220000001`
+   (o inicia sesión como Ana y arranca con sus datos) y luego escribe
+   "quiero continuar mi trámite". El bot reconoce a Ana por su teléfono,
+   recupera el trámite pendiente y le ofrece seguir donde se quedó. El
+   evento `canal.cambiado` queda en el log.
 3. **Call Center** (`/asesor`): busca por teléfono `2220000001` o por
    folio. El asesor ve estudio, clínica, precio y datos pendientes **sin
    pedirle a Ana que repita nada**. Completa el dato pendiente si hace falta.
@@ -309,8 +362,9 @@ curl http://localhost:8080/api/health
    intacto, reconstruido desde el event log. El tablero muestra la etapa
    actual, los canales recorridos y la línea de tiempo unificada.
 
-Si el backend no responde, el frontend entra en "Modo demo sin backend" con
-datos mock locales: la demo nunca se cae en vivo.
+Si el backend no responde, el frontend muestra el banner "Modo demo sin
+backend" y solo el catálogo usa datos locales: las escrituras y las
+lecturas de trámites no inventan datos, avisan que no se guardó nada.
 
 ## Endpoints principales
 
@@ -323,6 +377,10 @@ datos mock locales: la demo nunca se cae en vivo.
 | GET | `/api/pacientes?telefono=` | Resolver identidad por teléfono (+fechaNacimiento) |
 | GET | `/api/pacientes/buscar?nombre=` | Pacientes por nombre (contiene, sin mayúsculas) |
 | GET | `/api/pacientes` | Lista de todos los pacientes |
+| GET | `/api/admin/usuarios` | Usuarios con cantidad de folios (solo por URL en el front) |
+| POST | `/api/admin/usuarios` | Crear usuario (409 si el teléfono ya existe) |
+| PUT | `/api/admin/usuarios/{id}` | Editar usuario (la contraseña solo cambia si se envía una nueva) |
+| DELETE | `/api/admin/usuarios/{id}` | Borrar usuario con sus folios, citas y eventos (`{"foliosEliminados": N}`) |
 | POST | `/api/tramites` | Crear trámite |
 | GET | `/api/tramites/{id}` | Trámite + estado actual (UUID) |
 | GET | `/api/tramites/folio/{folio}` | Trámite por folio (ej. SD-2026-0001) |

@@ -63,8 +63,10 @@ export default function HistorialPage() {
   }, [cargar]);
 
   function continuarEnWhatsapp(t: Tramite) {
-    window.localStorage.setItem('saluddigna-wa-telefono', t.paciente?.telefono ?? paciente?.telefono ?? '');
-    window.localStorage.setItem('saluddigna-wa-folio', t.folio);
+    // El teléfono y el folio se pasan por sessionStorage: solo viven
+    // en esta pestaña, no quedan guardados para la próxima visita.
+    window.sessionStorage.setItem('saluddigna-wa-telefono', t.paciente?.telefono ?? paciente?.telefono ?? '');
+    window.sessionStorage.setItem('saluddigna-wa-folio', t.folio);
   }
 
   if (sinSesion) {

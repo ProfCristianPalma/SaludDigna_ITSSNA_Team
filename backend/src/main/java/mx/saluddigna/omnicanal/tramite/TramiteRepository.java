@@ -11,6 +11,9 @@ public interface TramiteRepository extends JpaRepository<Tramite, UUID> {
 
     List<Tramite> findByPacienteIdOrderByCreatedAtDesc(UUID pacienteId);
 
+    /** Cantidad de folios (trámites) de un paciente, para el admin de usuarios. */
+    long countByPacienteId(UUID pacienteId);
+
     List<Tramite> findByPacienteIdAndEstadoNotOrderByCreatedAtDesc(UUID pacienteId, EstadoTramite estado);
 
     Optional<Tramite> findByFolio(String folio);

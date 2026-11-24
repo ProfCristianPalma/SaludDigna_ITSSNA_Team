@@ -1,0 +1,262 @@
+import { useCallback, useEffect, useState } from 'react';
+import {
+  actualizarUsuarioAdmin,
+  crearUsuarioAdmin,
+  eliminarUsuarioAdmin,
+  getUsuariosAdmin,
+  isApiError,
+  normalizarTelefono,
+} from '../api';
+import type { UsuarioAdmin, UsuarioAdminInput } from '../api';
+
+// Administración de usuarios: SOLO se entra escribiendo la URL
+// /admin/usuarios. No hay botón ni enlace desde ninguna otra página,
+// ni se menciona en la bienvenida. Herramienta demo, sin gate de auth
+// extra: el resto del demo tampoco lo tiene. Todo es Postgres real:
+// crear, editar y borrar aquí queda guardado de forma permanente.
+export default function AdminUsuariosPage() {
+  const [usuarios, setUsuarios] = useState<UsuarioAdmin[]>([]);
+  const [busqueda, setBusqueda] = useState('');
+  const [cargando, setCargando] = useState(true);
+  const [mensaje, setMensaje] = useState('');
+  const [error, setError] = useState('');
+
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [nombre, setNombre] = useState('');
+  const [telefono, setTelefono] = useState('');
+  const [email, setEmail] = useState('');
+  const [fechaNacimiento, setFechaNacimiento] = useState('');
+  const [password, setPassword] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    setError('');
+    try {
+      setUsuarios(await getUsuariosAdmin());
+    } catch (err) {
+      setError(
+        isApiError(err)
+          ? `No se pudieron cargar los usuarios (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se pudieron cargar los usuarios. Revisa que el backend esté arriba.',
+      );
+    } finally {
+      setCargando(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  function limpiarFormulario() {
+    setEditandoId(null);
+    setNombre('');
+    setTelefono('');
+    setEmail('');
+    setFechaNacimiento('');
+    setPassword('');
+  }
+
+  function empezarCrear() {
+    limpiarFormulario();
+    setMensaje('');
+  }
+
+  function empezarEditar(u: UsuarioAdmin) {
+    setEditandoId(u.id);
+    setNombre(u.nombre);
+    setTelefono(u.telefono);
+    setEmail(u.email ?? '');
+    setFechaNacimiento(u.fechaNacimiento ?? '');
+    setPassword('');
+    setMensaje('');
+  }
+
+  async function handleGuardar(e: React.FormEvent) {
+    e.preventDefault();
+    setMensaje('');
+    setError('');
+    if (password.length > 0 && password.length < 6) {
+      setError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (!editandoId && password.length < 6) {
+      setError('La contraseña es obligatoria al crear un usuario (mínimo 6 caracteres).');
+      return;
+    }
+    const input: UsuarioAdminInput = {
+      nombre: nombre.trim(),
+      telefono: normalizarTelefono(telefono),
+      email: email.trim() || undefined,
+      fechaNacimiento: fechaNacimiento || undefined,
+      password: password || undefined,
+    };
+    setGuardando(true);
+    try {
+      if (editandoId) {
+        await actualizarUsuarioAdmin(editandoId, input);
+        setMensaje(`Usuario ${input.nombre} actualizado y guardado en la base de datos.`);
+      } else {
+        await crearUsuarioAdmin(input);
+        setMensaje(`Usuario ${input.nombre} creado y guardado en la base de datos.`);
+      }
+      limpiarFormulario();
+      await cargar();
+    } catch (err) {
+      setError(
+        isApiError(err)
+          ? `No se pudo guardar (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se guardó nada. Revisa que el backend esté arriba.',
+      );
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  async function handleEliminar(u: UsuarioAdmin) {
+    const confirmar = window.confirm(
+      `¿Borrar a ${u.nombre} (${u.telefono})?\n\n` +
+        `Se borrarán también sus ${u.cantidadFolios} folio(s), sus citas y sus eventos. ` +
+        `Esto no se puede deshacer.`,
+    );
+    if (!confirmar) return;
+    setMensaje('');
+    setError('');
+    try {
+      const res = await eliminarUsuarioAdmin(u.id);
+      setMensaje(`Usuario ${u.nombre} borrado de la base de datos (con sus ${res.foliosEliminados} folio(s)).`);
+      await cargar();
+    } catch (err) {
+      setError(
+        isApiError(err)
+          ? `No se pudo borrar (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se borró nada. Revisa que el backend esté arriba.',
+      );
+    }
+  }
+
+  const q = busqueda.trim().toLowerCase();
+  const visibles = q
+    ? usuarios.filter(
+        (u) =>
+          u.nombre.toLowerCase().includes(q) ||
+          u.telefono.replace(/\D/g, '').includes(q.replace(/\D/g, '')),
+      )
+    : usuarios;
+
+  return (
+    <div>
+      <h1>Administración de usuarios</h1>
+      <p className="muted">
+        Listado de usuarios de la base de datos, con su cantidad de folios. Crear, editar y borrar aquí
+        queda guardado de forma permanente en Postgres (no es memoria ni caché).
+        Al borrar un usuario se borran también sus folios, sus citas y sus eventos.
+      </p>
+
+      {mensaje && <p className="notice" role="status">{mensaje}</p>}
+      {error && <p className="notice" role="alert">{error}</p>}
+
+      <div className="card form-inline" style={{ marginBottom: 16 }}>
+        <input
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          placeholder="Buscar por nombre o teléfono"
+          aria-label="Buscar usuario"
+        />
+        <button type="button" className="btn btn-secondary" onClick={() => void cargar()} disabled={cargando}>
+          Actualizar
+        </button>
+        <button type="button" className="btn btn-primary" onClick={empezarCrear}>
+          Nuevo usuario
+        </button>
+      </div>
+
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2>{editandoId ? 'Editar usuario' : 'Crear usuario'}</h2>
+        <form onSubmit={handleGuardar} className="form">
+          <label>
+            Nombre completo
+            <input value={nombre} onChange={(e) => setNombre(e.target.value)} required />
+          </label>
+          <label>
+            Teléfono (10 dígitos, sin +52)
+            <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="2220000001" required />
+          </label>
+          <label>
+            Correo electrónico
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="tu@correo.com" />
+          </label>
+          <label>
+            Fecha de nacimiento
+            <input type="date" value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} />
+          </label>
+          <label>
+            Contraseña {editandoId ? '(dejar vacía para no cambiarla)' : '(mínimo 6 caracteres)'}
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={editandoId ? 'Sin cambio' : 'Mínimo 6 caracteres'}
+              autoComplete="new-password"
+            />
+          </label>
+          <div className="actions">
+            <button type="submit" className="btn btn-primary" disabled={guardando}>
+              {guardando ? 'Guardando…' : editandoId ? 'Guardar cambios' : 'Crear usuario'}
+            </button>
+            {editandoId && (
+              <button type="button" className="btn btn-secondary" onClick={limpiarFormulario}>
+                Cancelar edición
+              </button>
+            )}
+          </div>
+        </form>
+      </section>
+
+      {cargando && usuarios.length === 0 && <p className="muted">Cargando usuarios…</p>}
+      {!cargando && visibles.length === 0 && <p className="muted">No hay usuarios con esa búsqueda.</p>}
+
+      {visibles.length > 0 && (
+        <section className="card">
+          <h2>Usuarios ({visibles.length})</h2>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Nombre</th>
+                <th style={{ textAlign: 'left' }}>Teléfono</th>
+                <th style={{ textAlign: 'left' }}>Correo</th>
+                <th style={{ textAlign: 'left' }}>Nacimiento</th>
+                <th style={{ textAlign: 'left' }}>Folios</th>
+                <th style={{ textAlign: 'left' }}>Login</th>
+                <th style={{ textAlign: 'left' }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibles.map((u) => (
+                <tr key={u.id}>
+                  <td>{u.nombre}</td>
+                  <td>{u.telefono}</td>
+                  <td>{u.email ?? '—'}</td>
+                  <td>{u.fechaNacimiento ?? '—'}</td>
+                  <td>{u.cantidadFolios}</td>
+                  <td>{u.tienePassword ? 'Sí' : 'Sin contraseña'}</td>
+                  <td>
+                    <div className="actions">
+                      <button type="button" className="btn btn-small" onClick={() => empezarEditar(u)}>
+                        Editar
+                      </button>
+                      <button type="button" className="btn btn-small" onClick={() => void handleEliminar(u)}>
+                        Borrar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </div>
+  );
+}

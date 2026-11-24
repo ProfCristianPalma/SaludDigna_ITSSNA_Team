@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { getPerfilYo, getToken, getTramitesPorTelefono, enviarWhatsapp, normalizarTelefono } from '../api';
-import { MOCK_PACIENTE_ANA } from '../mock';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -14,7 +13,9 @@ const WA_TELEFONO_KEY = 'saluddigna-wa-telefono';
 const WA_FOLIO_KEY = 'saluddigna-wa-folio';
 
 export default function WhatsappPage() {
-  const [telefono, setTelefono] = useState(MOCK_PACIENTE_ANA.telefono);
+  // Sin sesión y sin teléfono guardado en esta pestaña, el teléfono
+  // arranca VACÍO: ya no hay ningún usuario de ejemplo cargado.
+  const [telefono, setTelefono] = useState('');
   const [paciente, setPaciente] = useState<Paciente | null>(null);
   const [texto, setTexto] = useState('');
   const [mensajes, setMensajes] = useState<MensajeChat[]>([
@@ -28,12 +29,12 @@ export default function WhatsappPage() {
   const folioAutoEnviado = useRef(false);
 
   // Con sesión, WhatsApp arranca con EL paciente logueado: su nombre,
-  // su teléfono y sus folios. Sin sesión, Ana de ejemplo como antes.
-  // "Abrir WhatsApp" desde App o "Continuar en WhatsApp" desde Historial
-  // dejan el teléfono y el folio en localStorage como respaldo.
+  // su teléfono y sus folios. Sin sesión, el teléfono arranca vacío y
+  // hay que escribirlo (o entrar desde App/Historial, que lo dejan en
+  // sessionStorage como respaldo solo para esta pestaña).
   useEffect(() => {
     async function cargarSesion() {
-      const guardadoTel = window.localStorage.getItem(WA_TELEFONO_KEY);
+      const guardadoTel = window.sessionStorage.getItem(WA_TELEFONO_KEY);
       if (guardadoTel) setTelefono(normalizarTelefono(guardadoTel));
       if (!getToken()) return;
       try {
@@ -55,7 +56,7 @@ export default function WhatsappPage() {
           ]);
         }
       } catch {
-        // Sin sesión válida: se queda el ejemplo de Ana.
+        // Sin sesión válida: el teléfono se queda como esté (vacío o el guardado).
       } finally {
         setSesionLista(true);
       }
@@ -83,7 +84,7 @@ export default function WhatsappPage() {
     } catch {
       setMensajes((prev) => [
         ...prev,
-        { id: idBase + 1, de: 'bot', texto: 'No pude conectar en este momento, pero tu mensaje quedó registrado. Inténtalo de nuevo en un momento.' },
+        { id: idBase + 1, de: 'bot', texto: 'No pude conectar con el backend, tu mensaje no se envió ni se guardó. Revisa que el backend esté arriba e inténtalo de nuevo.' },
       ]);
     } finally {
       setEnviando(false);
@@ -91,14 +92,14 @@ export default function WhatsappPage() {
   }
 
   // Si se llegó desde Historial con un folio, se manda solo una vez,
-  // y solo cuando ya se cargó la sesión (si no, se mandaría con el
-  // teléfono de ejemplo de Ana y el folio no pertenecería a ese teléfono).
+  // y solo cuando ya se cargó la sesión (si no, se mandaría con un
+  // teléfono vacío o de otra persona y el folio no pertenecería a ese teléfono).
   useEffect(() => {
     if (!sesionLista || folioAutoEnviado.current) return;
-    const folio = window.localStorage.getItem(WA_FOLIO_KEY);
+    const folio = window.sessionStorage.getItem(WA_FOLIO_KEY);
     if (!folio || !telefono) return;
     folioAutoEnviado.current = true;
-    window.localStorage.removeItem(WA_FOLIO_KEY);
+    window.sessionStorage.removeItem(WA_FOLIO_KEY);
     void handleEnviar(new Event('submit') as unknown as React.FormEvent, folio);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [telefono, sesionLista]);
@@ -111,7 +112,7 @@ export default function WhatsappPage() {
       <p className="muted">
         {paciente
           ? `Hola, ${primerNombre}: el bot te reconoce por tu teléfono ${paciente.telefono} y tus folios.`
-          : 'El bot reconoce tus trámites por teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir.'}
+          : 'El bot reconoce tus trámites por teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Si inicias sesión, arranca con tus datos.'}
       </p>
 
       <div className="wa-shell">
@@ -187,7 +188,7 @@ export default function WhatsappPage() {
           <p>
             {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
           </p>
-          <p className="muted">Paciente: {tramite.paciente?.nombre ?? paciente?.nombre ?? MOCK_PACIENTE_ANA.nombre}</p>
+          <p className="muted">Paciente: {tramite.paciente?.nombre ?? paciente?.nombre ?? '—'}</p>
         </section>
       )}
 

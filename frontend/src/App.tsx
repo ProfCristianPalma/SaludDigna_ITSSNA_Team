@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { checkBackend, getPerfilYo, getToken, logout as cerrarSesionApi } from './api';
 import type { PerfilYo } from './api';
+import AdminUsuariosPage from './pages/AdminUsuariosPage';
 import AppPage from './pages/AppPage';
 import AsesorPage from './pages/AsesorPage';
 import BienvenidaPage from './pages/BienvenidaPage';
@@ -18,6 +19,14 @@ export default function App() {
   const [sesion, setSesion] = useState<PerfilYo | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
+
+  // La sesión vive en sessionStorage (ver api.ts): al cerrar el
+  // navegador o abrir una pestaña nueva no hay usuario cargado. Si
+  // queda un token viejo en localStorage (de antes de este cambio),
+  // se borra al montar la App para que no vuelva a aparecer Luis.
+  useEffect(() => {
+    window.localStorage.removeItem('saluddigna-token');
+  }, []);
 
   // Antes esto se chequeaba UNA sola vez al cargar: si el backend aún
   // estaba arrancando (Docker tarda 30-60 s la primera vez), el banner
@@ -62,7 +71,7 @@ export default function App() {
   function cerrarSesion() {
     cerrarSesionApi();
     setSesion(null);
-    navigate('/login');
+    navigate('/');
   }
 
   const nombreSesion = sesion?.paciente?.nombre.split(' ')[0] ?? sesion?.usuario ?? null;
@@ -88,17 +97,16 @@ export default function App() {
           <NavLink to="/journey">Journey</NavLink>
         </nav>
         <nav className="nav-links" aria-label="Sesión">
-          {sesion ? (
+          {/* Iniciar sesión y Crear cuenta SIEMPRE visibles, haya sesión o no:
+              con sesión activa, además "Hola, {nombre}" y Cerrar sesión bien visible. */}
+          <NavLink to="/login">Iniciar sesión</NavLink>
+          <NavLink to="/registro">Crear cuenta</NavLink>
+          {sesion && (
             <>
               <span className="muted">Hola, {nombreSesion}</span>
-              <button type="button" className="btn btn-ghost" onClick={cerrarSesion}>
+              <button type="button" className="btn btn-secondary" onClick={cerrarSesion}>
                 Cerrar sesión
               </button>
-            </>
-          ) : (
-            <>
-              <NavLink to="/login">Iniciar sesión</NavLink>
-              <NavLink to="/registro">Registrarse</NavLink>
             </>
           )}
         </nav>
@@ -128,6 +136,9 @@ export default function App() {
           <Route path="/journey" element={<JourneyPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/registro" element={<RegistroPage />} />
+          {/* Admin de usuarios: SOLO por URL, sin botón ni enlace desde
+              ninguna otra página (ver AdminUsuariosPage). */}
+          <Route path="/admin/usuarios" element={<AdminUsuariosPage />} />
           <Route path="*" element={<BienvenidaPage />} />
         </Routes>
       </main>

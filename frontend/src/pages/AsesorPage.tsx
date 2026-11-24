@@ -8,13 +8,15 @@ import {
   getTramitePorFolio,
   getTramitesPorTelefono,
   guardarNotaCallCenter,
+  isApiError,
 } from '../api';
 import type { Evento, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 import Timeline from '../components/Timeline';
 
 export default function AsesorPage() {
-  const [busqueda, setBusqueda] = useState('2220000001');
+  // La búsqueda arranca vacía: ningún teléfono de ejemplo cargado.
+  const [busqueda, setBusqueda] = useState('');
   const [tramites, setTramites] = useState<Tramite[]>([]);
   const [tramite, setTramite] = useState<Tramite | null>(null);
   const [timeline, setTimeline] = useState<Evento[]>([]);
@@ -64,8 +66,12 @@ export default function AsesorPage() {
       if (lista.length > 1) {
         setMensaje(`Encontré ${lista.length} folios. Elige uno de la lista para ver su contexto.`);
       }
-    } catch {
-      setMensaje('No se encontró un trámite con ese teléfono, folio o nombre. Verifica la búsqueda.');
+    } catch (err) {
+      setMensaje(
+        isApiError(err)
+          ? 'No se encontró un trámite con ese teléfono, folio o nombre. Verifica la búsqueda.'
+          : 'El backend no respondió, no se pudo buscar. Revisa que el backend esté arriba.',
+      );
     } finally {
       setBuscando(false);
     }

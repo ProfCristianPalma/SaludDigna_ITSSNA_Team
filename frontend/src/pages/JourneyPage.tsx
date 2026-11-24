@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { esTelefono, getJourney, getTramitesPorTelefono } from '../api';
+import { esTelefono, getJourney, getTramitesPorTelefono, isApiError } from '../api';
 import type { EstadoTramite, Evento, Journey, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 import Timeline from '../components/Timeline';
@@ -34,21 +34,30 @@ const CANAL_ICON: Record<string, string> = {
 
 export default function JourneyPage() {
   const { id } = useParams<{ id?: string }>();
-  const [busqueda, setBusqueda] = useState(id ?? 'SD-2026-0001');
+  // Sin folio de ejemplo cargado: la búsqueda arranca vacía (o con el
+  // folio de la URL, si se llegó desde otra página).
+  const [busqueda, setBusqueda] = useState(id ?? '');
   const [journey, setJourney] = useState<Journey | null>(null);
   const [folios, setFolios] = useState<Tramite[]>([]);
   const [cargando, setCargando] = useState(false);
   const [ultimaActualizacion, setUltimaActualizacion] = useState('');
+  const [error, setError] = useState('');
 
   const cargarJourney = useCallback(async (folio: string) => {
     setCargando(true);
+    setError('');
     try {
       const j = await getJourney(folio);
       setJourney(j);
       setFolios([]);
       setUltimaActualizacion(new Date().toLocaleTimeString('es-MX'));
-    } catch {
+    } catch (err) {
       setJourney(null);
+      setError(
+        isApiError(err)
+          ? 'No se encontró el trámite. Verifica el folio, teléfono o UUID.'
+          : 'El backend no respondió, no se pudo cargar el Journey. Revisa que el backend esté arriba.',
+      );
     } finally {
       setCargando(false);
     }
@@ -58,6 +67,7 @@ export default function JourneyPage() {
   const cargar = useCallback(async (q: string) => {
     const query = q.trim();
     if (!query) return;
+    setError('');
     if (esTelefono(query)) {
       setCargando(true);
       try {
@@ -73,9 +83,14 @@ export default function JourneyPage() {
         }
         setJourney(null);
         setFolios(lista);
-      } catch {
+      } catch (err) {
         setJourney(null);
         setFolios([]);
+        setError(
+          isApiError(err)
+            ? 'No se encontró ningún folio con ese teléfono.'
+            : 'El backend no respondió, no se pudo buscar. Revisa que el backend esté arriba.',
+        );
       } finally {
         setCargando(false);
       }
@@ -85,7 +100,7 @@ export default function JourneyPage() {
   }, [cargarJourney]);
 
   useEffect(() => {
-    void cargar(busqueda);
+    if (busqueda.trim()) void cargar(busqueda);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -143,7 +158,9 @@ export default function JourneyPage() {
         </section>
       )}
 
-      {!tramite && !cargando && folios.length === 0 && <p className="notice">No se encontró el trámite. Verifica el folio, teléfono o UUID.</p>}
+      {!tramite && !cargando && folios.length === 0 && (
+        <p className="notice">{error || 'Escribe un folio, un teléfono o un UUID y pulsa "Cargar trámite".'}</p>
+      )}
       {cargando && !tramite && folios.length === 0 && <p className="muted">Cargando journey…</p>}
 
       {tramite && (

@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorTelefono, seleccionarClinica } from '../api';
-import { MOCK_PACIENTE_ANA } from '../mock';
 import type { Clinica, Estudio, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 const FOLIO_KEY = 'saluddigna-folio';
 
 export default function WebPage() {
-  const [nombre, setNombre] = useState(MOCK_PACIENTE_ANA.nombre);
-  const [telefono, setTelefono] = useState(MOCK_PACIENTE_ANA.telefono);
-  const [fechaNacimiento, setFechaNacimiento] = useState(MOCK_PACIENTE_ANA.fechaNacimiento);
+  // Sin sesión, el formulario arranca VACÍO: ya no hay ningún usuario
+  // de ejemplo cargado. Con sesión, se prellena con los datos del logueado.
+  const [nombre, setNombre] = useState('');
+  const [telefono, setTelefono] = useState('');
+  const [fechaNacimiento, setFechaNacimiento] = useState('');
   const [estudios, setEstudios] = useState<Estudio[]>([]);
   const [clinicas, setClinicas] = useState<Clinica[]>([]);
   const [estudioId, setEstudioId] = useState('');
@@ -36,14 +37,12 @@ export default function WebPage() {
       if (list.length > 0) setEstudioId(list[0].id);
     });
     getClinicas().then(setClinicas);
-    const guardado = window.localStorage.getItem(FOLIO_KEY);
-    if (guardado) setMensaje(`Tienes un trámite guardado: ${guardado}. Puedes retomarlo en WhatsApp o en Journey.`);
+    const guardado = window.sessionStorage.getItem(FOLIO_KEY);
+    if (guardado) setMensaje(`Tienes un trámite guardado en esta pestaña: ${guardado}. Puedes retomarlo en WhatsApp o en Journey.`);
     // Si hay sesión de paciente, prellena con SUS datos (se pueden cambiar).
+    // Sin sesión, el formulario se queda vacío.
     async function prellenar() {
-      if (!getToken()) {
-        void cargarFolios(MOCK_PACIENTE_ANA.telefono);
-        return;
-      }
+      if (!getToken()) return;
       try {
         const perfil = await getPerfilYo();
         if (perfil.paciente) {
@@ -54,9 +53,8 @@ export default function WebPage() {
           return;
         }
       } catch {
-        // Sin sesión válida: se queda el ejemplo de Ana.
+        // Sin sesión válida: el formulario se queda vacío.
       }
-      void cargarFolios(MOCK_PACIENTE_ANA.telefono);
     }
     void prellenar();
   }, []);
@@ -73,11 +71,11 @@ export default function WebPage() {
       const creado = await crearTramite({ nombre, telefono, fechaNacimiento, estudioId, canal: 'WEB' });
       const cotizado = await cotizar(creado.id, estudioId);
       setTramite(cotizado);
-      window.localStorage.setItem(FOLIO_KEY, cotizado.folio);
+      window.sessionStorage.setItem(FOLIO_KEY, cotizado.folio);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
       await cargarFolios(telefono);
     } catch {
-      setMensaje('No se pudo cotizar. Inténtalo de nuevo.');
+      setMensaje('No se pudo cotizar: el backend no respondió y no se creó ningún folio. Revisa que el backend esté arriba.');
     } finally {
       setCargando(false);
     }
@@ -92,7 +90,7 @@ export default function WebPage() {
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
       await cargarFolios(telefono);
     } catch {
-      setMensaje('No se pudo seleccionar la clínica.');
+      setMensaje('No se pudo seleccionar la clínica: el backend no respondió y no se guardó nada. Revisa que el backend esté arriba.');
     } finally {
       setCargando(false);
     }
@@ -100,7 +98,7 @@ export default function WebPage() {
 
   function handleInterrumpir() {
     if (!tramite) return;
-    window.localStorage.setItem(FOLIO_KEY, tramite.folio);
+    window.sessionStorage.setItem(FOLIO_KEY, tramite.folio);
     setMensaje(
       `Simulación de interrupción: cerraste sin confirmar. Tu folio ${tramite.folio} quedó guardado y puedes retomarlo por WhatsApp, con el asesor o en la App — sin repetir tus datos.`,
     );

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
+import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError, logout } from '../api';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -10,6 +10,7 @@ export default function AppPage() {
   const [mensaje, setMensaje] = useState('');
   const [sinSesion, setSinSesion] = useState(false);
   const [cargando, setCargando] = useState(true);
+  const navigate = useNavigate();
 
   const cargar = useCallback(async () => {
     // Sin sesión no hay paciente que mostrar: la App exige login.
@@ -62,10 +63,18 @@ export default function AppPage() {
   }, [cargar]);
 
   function abrirWhatsapp() {
-    // WhatsApp arranca con el paciente logueado, no con Ana de ejemplo.
+    // WhatsApp arranca con el paciente logueado. El teléfono se pasa
+    // por sessionStorage: solo vive en esta pestaña, no queda guardado.
     if (paciente) {
-      window.localStorage.setItem('saluddigna-wa-telefono', paciente.telefono);
+      window.sessionStorage.setItem('saluddigna-wa-telefono', paciente.telefono);
     }
+  }
+
+  function cerrarSesion() {
+    logout();
+    setPaciente(null);
+    setTramites([]);
+    navigate('/');
   }
 
   const primerNombre = paciente?.nombre.split(' ')[0] ?? 'Hola';
@@ -94,6 +103,11 @@ export default function AppPage() {
               <h1>Hola, {primerNombre} 👋</h1>
               <p className="muted">Tu salud, en una sola conversación.</p>
               {paciente && <p className="muted">{paciente.nombre} · {paciente.telefono}</p>}
+              <div className="actions" style={{ marginBottom: 12 }}>
+                <button type="button" className="btn btn-secondary" onClick={cerrarSesion}>
+                  Cerrar sesión
+                </button>
+              </div>
 
               <div className="actions">
                 <button type="button" className="btn btn-secondary" onClick={() => void cargar()} disabled={cargando}>
