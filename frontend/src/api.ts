@@ -173,8 +173,14 @@ function markLive(): void {
   isMock = false;
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs = 4000): Promise<T> {
-  const controller = new AbortController();
+// Timeout para las escrituras (crear trámite, cotizar, elegir clínica,
+// confirmar): 15 s en vez de 4 s. Tras arrancar Docker el backend está
+// frío y una respuesta puede tardar más de 4 s: el cliente abortaba,
+// el servidor igual guardaba el folio, y el front decía que no se creó
+// nada (falso negativo). Las lecturas siguen a 4 s.
+export const ESCRITURA_TIMEOUT_MS = 15000;
+
+async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs = 4000): Promise<T> {  const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const token = getToken();
@@ -397,14 +403,26 @@ export async function getTimeline(id: string): Promise<Evento[]> {
 export async function getJourney(id: string): Promise<Journey> {
   const q = id.trim();
   let raw: Record<string, unknown>;
-  if (UUID_RE.test(q)) {
-    raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(q)}`);
-  } else if (esFolio(q)) {
-    raw = await fetchJson<Record<string, unknown>>(`/journey/folio/${encodeURIComponent(q)}`);
-  } else {
-    // Telefono: resolver a UUID antes de llamar al journey.
+  try {
+    if (UUID_RE.test(q)) {
+      raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(q)}`);
+    } else if (esFolio(q)) {
+      raw = await fetchJson<Record<string, unknown>>(`/journey/folio/${encodeURIComponent(q)}`);
+    } else {
+      // Telefono: resolver a UUID antes de llamar al journey.
+      const tramite = await getTramite(q);
+      raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(tramite.id)}`);
+    }
+  } catch (err) {
+    // Si el endpoint de journey falla (HTTP 4xx/5xx) pero el tramite
+    // existe, se compone el journey con los dos endpoints que si
+    // funcionan: el tramite por folio/UUID y su timeline. No es un
+    // fallback mock: son datos reales de la BD. Un error de red (sin
+    // respuesta del backend) se propaga tal cual.
+    if (!isApiError(err)) throw err;
     const tramite = await getTramite(q);
-    raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(tramite.id)}`);
+    const timeline = await getTimeline(tramite.id);
+    return { tramite, timeline };
   }
   const tramiteRaw = raw.tramite as Record<string, unknown> | undefined;
   return {
@@ -454,7 +472,10 @@ export async function registrarEventoCheckIn(tramiteId: string): Promise<Evento>
 export interface CrearTramiteInput {
   nombre: string;
   telefono: string;
-  fechaNacimiento: string;
+  /** Opcional: el formulario de cotizar ya no la pide. Sin sesión se
+      crea el paciente solo con nombre y teléfono (la fecha es nullable
+      en la BD); con sesión se usa la fecha de la sesión si la tiene. */
+  fechaNacimiento?: string;
   estudioId: string;
   canal?: string;
 }
@@ -465,53 +486,75 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
   const telefono = normalizarTelefono(input.telefono);
   {
     // El backend crea trámites por pacienteId (UUID), no por nombre/teléfono.
-    // 1) Busca al paciente por teléfono, 2) si no existe lo registra,
+    // 1) Busca al paciente solo por teléfono (es la clave única; la fecha
+    // de nacimiento ya no se pide en cotizar y tampoco se usa para
+    // verificar identidad aquí), 2) si no existe lo registra,
     // 3) crea el trámite con ese pacienteId y el estudioId numérico.
+    // Timeout largo (15 s): el backend frío puede tardar y un aborto
+    // aquí dejaba el folio creado sin que el front lo supiera.
     let paciente: Paciente;
     try {
       paciente = await fetchJson<Paciente>(
-        `/pacientes?telefono=${encodeURIComponent(telefono)}&fechaNacimiento=${encodeURIComponent(input.fechaNacimiento)}`,
+        `/pacientes?telefono=${encodeURIComponent(telefono)}`,
+        undefined,
+        ESCRITURA_TIMEOUT_MS,
       );
     } catch (err) {
-      // Si el telefono ya existe pero la fecha no coincidio, el POST daria 409:
-      // entonces se resuelve solo por telefono y se usa ese paciente.
+      // Red caída u otro error HTTP: se propaga, no se intenta registrar.
+      if (!isApiError(err) || err.status !== 404) throw err;
+      // No existe (404): se registra con nombre y teléfono; la fecha
+      // solo se manda si venía en el input (sesión con fecha).
       try {
-        paciente = await fetchJson<Paciente>('/pacientes', {
-          method: 'POST',
-          body: JSON.stringify({
-            nombre: input.nombre,
-            telefono,
-            email: '',
-            fechaNacimiento: input.fechaNacimiento,
-          }),
-        });
+        paciente = await fetchJson<Paciente>(
+          '/pacientes',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              nombre: input.nombre,
+              telefono,
+              email: '',
+              ...(input.fechaNacimiento ? { fechaNacimiento: input.fechaNacimiento } : {}),
+            }),
+          },
+          ESCRITURA_TIMEOUT_MS,
+        );
       } catch (err2) {
         if (isApiError(err2) && err2.status === 409) {
           paciente = await fetchJson<Paciente>(
             `/pacientes?telefono=${encodeURIComponent(telefono)}`,
+            undefined,
+            ESCRITURA_TIMEOUT_MS,
           );
         } else {
           throw err2;
         }
       }
     }
-    const raw = await fetchJson<Record<string, unknown>>('/tramites', {
-      method: 'POST',
-      body: JSON.stringify({
-        pacienteId: paciente.id,
-        estudioId: toNumberId(input.estudioId),
-        canalOrigen: input.canal ?? 'WEB',
-      }),
-    });
+    const raw = await fetchJson<Record<string, unknown>>(
+      '/tramites',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          pacienteId: paciente.id,
+          estudioId: toNumberId(input.estudioId),
+          canalOrigen: input.canal ?? 'WEB',
+        }),
+      },
+      ESCRITURA_TIMEOUT_MS,
+    );
     return normalizeTramite(raw);
   }
 }
 
 export async function cotizar(tramiteId: string, estudioId: string): Promise<Tramite> {
-  const raw = await fetchJson<Record<string, unknown>>(`/tramites/${encodeURIComponent(tramiteId)}/cotizar`, {
-    method: 'POST',
-    body: JSON.stringify({ estudioId: toNumberId(estudioId) }),
-  });
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/cotizar`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ estudioId: toNumberId(estudioId) }),
+    },
+    ESCRITURA_TIMEOUT_MS,
+  );
   return normalizeTramite(raw);
 }
 
@@ -523,15 +566,20 @@ export async function seleccionarClinica(tramiteId: string, clinicaId: string): 
       method: 'POST',
       body: JSON.stringify({ clinicaId: toNumberId(clinicaId) }),
     },
+    ESCRITURA_TIMEOUT_MS,
   );
   return normalizeTramite(raw);
 }
 
 export async function confirmar(tramiteId: string, fechaCita: string): Promise<Tramite> {
-  const raw = await fetchJson<Record<string, unknown>>(`/tramites/${encodeURIComponent(tramiteId)}/confirmar`, {
-    method: 'POST',
-    body: JSON.stringify({ fechaCita }),
-  });
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/confirmar`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ fechaCita }),
+    },
+    ESCRITURA_TIMEOUT_MS,
+  );
   return normalizeTramite(raw);
 }
 

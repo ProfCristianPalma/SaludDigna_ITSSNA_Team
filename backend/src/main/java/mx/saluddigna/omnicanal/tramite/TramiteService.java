@@ -264,23 +264,104 @@ public class TramiteService {
         return listarActivosDe(pacienteId).stream().findFirst();
     }
 
-    /** Vista journey: tramite + paciente + estudio + clinica + timeline + siguiente paso. */
+    /**
+     * Vista journey: tramite + paciente + estudio + clinica + timeline + siguiente paso.
+     * Se devuelve TODO como datos planos (mapas y listas, no entidades JPA):
+     * antes se devolvía el Tramite y la Cita como entidades, con sus
+     * relaciones LAZY (paciente, tramite de la cita), y la serialización
+     * Jackson del mapa fallaba con 500, así que el front mostraba "No se
+     * encontró el trámite" para CUALQUIER folio. Mismo patrón que el DTO
+     * de Clínica: los datos se arman dentro de la transacción.
+     */
     @Transactional(readOnly = true)
     public Map<String, Object> obtenerJourney(UUID tramiteId) {
         Tramite tramite = buscar(tramiteId);
         Map<String, Object> journey = new LinkedHashMap<>();
-        journey.put("tramite", tramite);
-        journey.put("paciente", tramite.getPaciente());
+        journey.put("tramite", tramiteComoMapa(tramite));
+        journey.put("paciente", pacienteComoMapa(tramite.getPaciente()));
         if (tramite.getEstudioId() != null) {
-            estudios.findById(tramite.getEstudioId()).ifPresent(e -> journey.put("estudio", e));
+            estudios.findById(tramite.getEstudioId()).ifPresent(e -> journey.put("estudio", mapaDe(
+                    "id", String.valueOf(e.getId()),
+                    "nombre", e.getNombre(),
+                    "precio", e.getPrecio(),
+                    "descripcion", e.getDescripcion())));
         }
         if (tramite.getClinicaId() != null) {
-            clinicas.findById(tramite.getClinicaId()).ifPresent(c -> journey.put("clinica", c));
+            clinicas.findById(tramite.getClinicaId()).ifPresent(c -> journey.put("clinica", mapaDe(
+                    "id", String.valueOf(c.getId()),
+                    "nombre", c.getNombre(),
+                    "ciudad", c.getCiudad(),
+                    "direccion", c.getDireccion())));
         }
-        citas.findByTramiteId(tramiteId).ifPresent(c -> journey.put("cita", c));
-        journey.put("timeline", eventos.listarTimeline(tramiteId));
+        citas.findByTramiteId(tramiteId).ifPresent(c -> journey.put("cita", mapaDe(
+                "id", c.getId().toString(),
+                "fechaHora", c.getFechaHora() == null ? null : c.getFechaHora().toString(),
+                "clinica", c.getClinica() == null ? null : c.getClinica().getNombre(),
+                "estado", c.getEstado())));
+        journey.put("timeline", eventos.listarTimeline(tramiteId).stream().map(ev -> mapaDe(
+                "id", ev.getId().toString(),
+                "tramiteId", ev.getTramiteId().toString(),
+                "tipo", ev.getTipo(),
+                "canal", ev.getCanal(),
+                "actor", ev.getActor(),
+                "payload", ev.getPayload(),
+                "timestamp", ev.getTimestamp() == null ? null : ev.getTimestamp().toString()
+        )).toList());
         journey.put("siguientePaso", siguientePaso(tramite.getEstado()));
         return journey;
+    }
+
+    /** Mapa plano de un tramite, con las mismas claves que espera el
+        front (ver normalizeTramite en api.ts): nada de entidades JPA. */
+    private Map<String, Object> tramiteComoMapa(Tramite t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", t.getId().toString());
+        m.put("folio", t.getFolio());
+        m.put("estado", t.getEstado().name());
+        m.put("estudioId", t.getEstudioId());
+        m.put("clinicaId", t.getClinicaId());
+        m.put("precioCotizado", t.getPrecioCotizado());
+        m.put("fechaCita", t.getFechaCita() == null ? null : t.getFechaCita().toString());
+        m.put("canalOrigen", t.getCanalOrigen());
+        m.put("datosPendientes", new java.util.ArrayList<>(leerPendientes(t.getDatosPendientes()).keySet()));
+        if (t.getPaciente() != null) {
+            m.put("paciente", pacienteComoMapa(t.getPaciente()));
+        }
+        if (t.getEstudioId() != null) {
+            estudios.findById(t.getEstudioId()).ifPresent(e -> m.put("estudio", mapaDe(
+                    "id", String.valueOf(e.getId()),
+                    "nombre", e.getNombre(),
+                    "precio", e.getPrecio(),
+                    "descripcion", e.getDescripcion())));
+        }
+        if (t.getClinicaId() != null) {
+            clinicas.findById(t.getClinicaId()).ifPresent(c -> m.put("clinica", mapaDe(
+                    "id", String.valueOf(c.getId()),
+                    "nombre", c.getNombre(),
+                    "ciudad", c.getCiudad(),
+                    "direccion", c.getDireccion())));
+        }
+        return m;
+    }
+
+    private Map<String, Object> pacienteComoMapa(Paciente p) {
+        if (p == null) {
+            return null;
+        }
+        return mapaDe(
+                "id", p.getId().toString(),
+                "nombre", p.getNombre(),
+                "telefono", p.getTelefono(),
+                "fechaNacimiento", p.getFechaNacimiento() == null ? null : p.getFechaNacimiento().toString());
+    }
+
+    /** Mapa LinkedHashMap con pares clave/valor (Map.of no admite nulls). */
+    private static Map<String, Object> mapaDe(Object... pares) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < pares.length; i += 2) {
+            m.put(String.valueOf(pares[i]), pares[i + 1]);
+        }
+        return m;
     }
 
     public static String siguientePaso(EstadoTramite estado) {

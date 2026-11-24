@@ -94,7 +94,10 @@ export default function App() {
           </span>
         </Link>
         <nav className="nav-links" aria-label="Canales">
-          <NavLink to="/">Inicio</NavLink>
+          {/* La pestaña Inicio solo se ve SIN sesión: con sesión
+              iniciada no aparece en ninguna página. El logo de marca
+              sigue enlazando a "/". */}
+          {!sesion && <NavLink to="/">Inicio</NavLink>}
           <NavLink to="/cotizar">Cotizar</NavLink>
           <NavLink to="/whatsapp">WhatsApp</NavLink>
           {esPersonal && <NavLink to="/asesor">Asesor</NavLink>}
@@ -104,16 +107,20 @@ export default function App() {
           <NavLink to="/journey">Journey</NavLink>
         </nav>
         <nav className="nav-links" aria-label="Sesión">
-          {/* Iniciar sesión y Crear cuenta SIEMPRE visibles, haya sesión o no:
-              con sesión activa, además "Hola, {nombre}" y Cerrar sesión bien visible. */}
-          <NavLink to="/login">Iniciar sesión</NavLink>
-          <NavLink to="/registro">Crear cuenta</NavLink>
-          {sesion && (
+          {/* Sin sesión: Iniciar sesión y Crear cuenta. Con sesión, en
+              su lugar "Hola, {nombre}" (con color claro sobre la barra
+              azul, sin recorte) y Cerrar sesión bien visible. */}
+          {sesion ? (
             <>
-              <span className="muted">Hola, {nombreSesion}</span>
+              <span className="sesion-nombre">Hola, {nombreSesion}</span>
               <button type="button" className="btn btn-secondary" onClick={cerrarSesion}>
                 Cerrar sesión
               </button>
+            </>
+          ) : (
+            <>
+              <NavLink to="/login">Iniciar sesión</NavLink>
+              <NavLink to="/registro">Crear cuenta</NavLink>
             </>
           )}
         </nav>

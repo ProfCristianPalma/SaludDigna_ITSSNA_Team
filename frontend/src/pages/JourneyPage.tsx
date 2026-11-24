@@ -54,9 +54,14 @@ export default function JourneyPage() {
       setUltimaActualizacion(new Date().toLocaleTimeString('es-MX'));
     } catch (err) {
       setJourney(null);
+      // Error REAL con su status: un 404 es "folio no existe", pero un
+      // 500 (o cualquier otro) es un fallo del backend y debe decirlo,
+      // no disfrazarse de "no encontrado".
       setError(
         isApiError(err)
-          ? 'No se encontró el trámite. Verifica el folio, teléfono o UUID.'
+          ? err.status === 404
+            ? 'No se encontró el trámite. Verifica el folio, teléfono o UUID.'
+            : `No se pudo cargar el Journey (HTTP ${err.status}: ${err.message}). Revisa que el backend esté arriba y que hayas hecho git pull + docker compose up --build con el último cambio.`
           : 'El backend no respondió, no se pudo cargar el Journey. Revisa que el backend esté arriba.',
       );
     } finally {

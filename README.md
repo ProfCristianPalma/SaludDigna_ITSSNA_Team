@@ -82,8 +82,8 @@ La app arranca en `/` (Bienvenida). Desde ahí se va a todo lo demás:
 
 | Ruta | Ventana | Qué es |
 |---|---|---|
-| `/` | Bienvenida | Presentación de Salud Digna y de cada canal; botones a login, registro y cotizar |
-| `/cotizar` (alias `/web`) | Web | Cotizar un estudio y crear un folio nuevo |
+| `/` | Bienvenida | Solo presentación de Salud Digna y acciones de sesión (sin tarjetas de canales ni botón de cotizar; para cotizar está el enlace "Cotizar" del menú). Sin sesión: botones a login y registro. Con sesión: "Continuar como {nombre}", "Ver mi historial" y "Cerrar sesión" |
+| `/cotizar` (alias `/web`) | Web | Cotizar un estudio y crear un folio nuevo. Sin fecha de nacimiento: con sesión los datos vienen de la sesión (no editables); sin sesión solo se piden nombre y teléfono |
 | `/login` | Iniciar sesión | Ventana separada; tras entrar, va a `/app` (paciente) o a `/asesor` (asesor/admin) |
 | `/registro` | Crear cuenta | Ventana separada; tras crearla, entra directo a `/app` |
 | `/app` | App | Tus citas (exige sesión, muestra tu nombre y solo tus folios) |
@@ -97,6 +97,11 @@ La app arranca en `/` (Bienvenida). Desde ahí se va a todo lo demás:
 Login y Registro son ventanas separadas y se puede navegar entre ellas
 y al inicio: Login tiene "Crear cuenta" y "Volver a inicio"; Registro
 tiene "Iniciar sesión" y "Volver a inicio".
+
+Con sesión iniciada, "Iniciar sesión" y "Crear cuenta" ya NO se ven
+(ni en el menú ni en la bienvenida): en su lugar sale "Hola, {nombre}"
+y el botón "Cerrar sesión". La pestaña "Inicio" del menú tampoco se
+ve con sesión (el logo sigue enlazando a "/").
 
 ## Vistas de personal: Clínica, Asesor y Admin
 
@@ -339,8 +344,11 @@ leen y escriben sobre los mismos trámites.
   estudio, precio, estado, clínica, fecha de cita y canal de origen,
   del más reciente al más viejo, con enlace a su Journey y, si está
   COTIZADO, botón "Continuar en WhatsApp" que abre `/whatsapp` con ese
-  folio. La App (`/app`) muestra lo mismo en formato móvil, con botón
-  "Actualizar" y recarga al volver a la página; en Web, "Mis folios"
+  folio. Cada tarjeta muestra además "Pasos realizados" y "Pasos
+  faltantes" según el estado del folio (INICIADO → COTIZADO → Clínica
+  elegida → Cita confirmada → Atención en clínica), más los datos
+  pendientes si los tiene. La App (`/app`) muestra lo mismo en formato
+  móvil, con botón "Actualizar" y recarga al volver a la página; en Web, "Mis folios"
   enlaza también al Historial.
 - **Clínica (`/clinica`)**: recepción con las citas confirmadas de
   TODOS los pacientes. Se carga desde el DTO plano
@@ -362,6 +370,33 @@ leen y escriben sobre los mismos trámites.
   (La serialización LAZY no era la causa: `spring.jpa.open-in-view=true`
   está activado.) El DTO es ahora el camino principal por robustez, y
   el endpoint viejo sigue intacto.
+
+### Journey: datos planos, no entidades JPA
+
+`GET /api/journey/{id}` y `GET /api/journey/folio/{folio}` devuelven
+el journey como datos planos (mapas y listas, armados en
+`TramiteService.obtenerJourney` dentro de la transacción), nunca
+entidades JPA: antes se devolvían el `Tramite` y la `Cita` como
+entidades, con sus relaciones LAZY, y la serialización Jackson del mapa
+fallaba con 500, así que el front mostraba "No se encontró el trámite"
+para CUALQUIER folio aunque existiera. Si el endpoint de journey
+falla, el front lo compone con `GET /api/tramites/folio/{folio}` +
+`GET /api/tramites/{id}/timeline` (datos reales, no mock), y la
+página muestra el error REAL (HTTP + mensaje) en vez del genérico.
+
+### Cotizar sin fecha de nacimiento y sin falsos negativos
+
+El formulario de cotizar ya no pide fecha de nacimiento: con sesión
+los datos (nombre, teléfono, fecha) vienen de la sesión y no se
+muestran editables; sin sesión se cotiza solo con nombre y teléfono
+(la fecha es nullable en la BD y el paciente se resuelve por teléfono).
+Las escrituras del flujo de cotizar usan timeout de 15 s (antes 4 s):
+con el backend frío tras arrancar Docker, la respuesta tardaba más de
+4 s, el cliente abortaba y el servidor igual creaba el folio, así que
+el front decía que no se creó nada aunque el folio sí existía (falso
+negativo). Si aun así falla la respuesta, la página vuelve a consultar
+los folios del teléfono y, si el folio sí se creó, lo muestra en el
+panel derecho como creado, con una nota de que la respuesta tardó.
 
 ### WhatsApp con sesión
 

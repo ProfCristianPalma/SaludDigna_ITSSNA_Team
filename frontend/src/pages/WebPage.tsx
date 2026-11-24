@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorTelefono, seleccionarClinica } from '../api';
-import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
-import type { Clinica, Estudio, Tramite } from '../types';
+import { formatearFechaHora } from '../fechas';
+import type { Clinica, Estudio, Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 const FOLIO_KEY = 'saluddigna-folio';
 
 export default function WebPage() {
   // Sin sesión, el formulario arranca VACÍO: ya no hay ningún usuario
-  // de ejemplo cargado. Con sesión, se prellena con los datos del logueado.
+  // de ejemplo cargado. Con sesión de paciente, los datos vienen de la
+  // sesión (nombre, teléfono y fecha de nacimiento) y NO se muestran
+  // como editables: el formulario de cotizar ya no tiene fecha de
+  // nacimiento y, con sesión, tampoco nombre ni teléfono editables.
+  // Sin sesión se cotiza solo con nombre y teléfono (la fecha es
+  // nullable en la BD y el backend resuelve por teléfono).
+  const [sesionPaciente, setSesionPaciente] = useState<Paciente | null>(null);
   const [nombre, setNombre] = useState('');
   const [telefono, setTelefono] = useState('');
-  const [fechaNacimiento, setFechaNacimiento] = useState('');
   const [estudios, setEstudios] = useState<Estudio[]>([]);
   const [clinicas, setClinicas] = useState<Clinica[]>([]);
   const [estudioId, setEstudioId] = useState('');
@@ -40,16 +45,17 @@ export default function WebPage() {
     getClinicas().then(setClinicas);
     const guardado = window.sessionStorage.getItem(FOLIO_KEY);
     if (guardado) setMensaje(`Tienes un trámite guardado en esta pestaña: ${guardado}. Puedes retomarlo en WhatsApp o en Journey.`);
-    // Si hay sesión de paciente, prellena con SUS datos (se pueden cambiar).
-    // Sin sesión, el formulario se queda vacío.
+    // Si hay sesión de paciente, los datos de cotización son LOS DE LA
+    // SESIÓN. Sin sesión (o sesión de staff), el formulario se queda
+    // vacío y se cotiza solo con nombre y teléfono.
     async function prellenar() {
       if (!getToken()) return;
       try {
         const perfil = await getPerfilYo();
         if (perfil.paciente) {
+          setSesionPaciente(perfil.paciente);
           setNombre(perfil.paciente.nombre);
           setTelefono(perfil.paciente.telefono);
-          if (perfil.paciente.fechaNacimiento) setFechaNacimiento(formatearFecha(perfil.paciente.fechaNacimiento));
           void cargarFolios(perfil.paciente.telefono);
           return;
         }
@@ -65,28 +71,70 @@ export default function WebPage() {
   async function handleCotizar(e: React.FormEvent) {
     e.preventDefault();
     if (!estudioId) return;
-    // La fecha se escribe en DD/MM/AAAA y solo se convierte a ISO al enviar a la API.
-    if (!esFechaLatinaValida(fechaNacimiento)) {
-      setMensaje('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
-      return;
-    }
-    const fechaIso = parsearFechaLatina(fechaNacimiento);
-    if (!fechaIso) {
-      setMensaje('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
-      return;
-    }
+    // Teléfono y nombre efectivos: de la sesión si la hay, del formulario si no.
+    const telefonoEfectivo = sesionPaciente?.telefono ?? telefono;
+    const nombreEfectivo = sesionPaciente?.nombre ?? nombre;
+    const fechaSesion = sesionPaciente?.fechaNacimiento || undefined;
     setCargando(true);
     setMensaje('');
+    // Folios que ya existían antes de este intento, para detectar en
+    // la recuperación si el folio sí se creó aunque la respuesta tardó.
+    let idsPrevios = new Set(misFolios.map((t) => t.id));
+    try {
+      const actuales = await getTramitesPorTelefono(telefonoEfectivo);
+      idsPrevios = new Set(actuales.map((t) => t.id));
+    } catch {
+      // Sin red no hay lista previa: la recuperación lo intentará igual.
+    }
     try {
       // Cada Cotizar crea un folio NUEVO: un folio por estudio elegido.
-      const creado = await crearTramite({ nombre, telefono, fechaNacimiento: fechaIso, estudioId, canal: 'WEB' });
+      const creado = await crearTramite({
+        nombre: nombreEfectivo,
+        telefono: telefonoEfectivo,
+        ...(fechaSesion ? { fechaNacimiento: fechaSesion } : {}),
+        estudioId,
+        canal: 'WEB',
+      });
       const cotizado = await cotizar(creado.id, estudioId);
       setTramite(cotizado);
       window.sessionStorage.setItem(FOLIO_KEY, cotizado.folio);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
-      await cargarFolios(telefono);
+      await cargarFolios(telefonoEfectivo);
     } catch {
-      setMensaje('No se pudo cotizar: el backend no respondió y no se creó ningún folio. Revisa que el backend esté arriba.');
+      // Falso negativo: con el backend frío la respuesta de crear o de
+      // cotizar puede tardar y el cliente aborta, pero el servidor
+      // igual guarda el folio. Antes de decir que no se creó nada, se
+      // vuelve a consultar la BD: si apareció un folio nuevo con este
+      // estudio, se muestra en el panel como creado.
+      try {
+        const lista = await getTramitesPorTelefono(telefonoEfectivo);
+        let nuevo =
+          lista.find((t) => !idsPrevios.has(t.id) && t.estudio.id === estudioId) ??
+          lista.find((t) => !idsPrevios.has(t.id));
+        if (nuevo && (nuevo.estado === 'INICIADO' || nuevo.estado === 'DATOS_PENDIENTES')) {
+          // El folio se creó pero el paso de cotizar no llegó a
+          // confirmarse en el front: se reintenta una vez (timeout largo).
+          try {
+            nuevo = await cotizar(nuevo.id, estudioId);
+          } catch {
+            // Se queda el folio creado sin cotizar; se muestra igual.
+          }
+        }
+        if (nuevo) {
+          setTramite(nuevo);
+          window.sessionStorage.setItem(FOLIO_KEY, nuevo.folio);
+          setMensaje(
+            `La respuesta tardó, pero tu folio sí se creó: ${nuevo.folio}. Ya lo puedes ver en tu Historial.`,
+          );
+          await cargarFolios(telefonoEfectivo);
+          return;
+        }
+      } catch {
+        // Sin red no se puede verificar si el folio se creó.
+      }
+      setMensaje(
+        'No se pudo cotizar: el backend no respondió. Revisa tu Historial: si el folio se creó, aparecerá ahí.',
+      );
     } finally {
       setCargando(false);
     }
@@ -99,7 +147,7 @@ export default function WebPage() {
       const actualizado = await seleccionarClinica(tramite.id, clinicaId);
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
-      await cargarFolios(telefono);
+      await cargarFolios(sesionPaciente?.telefono ?? telefono);
     } catch {
       setMensaje('No se pudo seleccionar la clínica: el backend no respondió y no se guardó nada. Revisa que el backend esté arriba.');
     } finally {
@@ -123,26 +171,30 @@ export default function WebPage() {
       <div className="grid-2">
         <section className="card">
           <h2>1 · Tus datos y tu estudio</h2>
+          {sesionPaciente ? (
+            <p className="muted" style={{ marginBottom: 12 }}>
+              Cotizando como <strong>{sesionPaciente.nombre}</strong> · {sesionPaciente.telefono}. Tus datos
+              vienen de tu sesión y no se pueden modificar aquí.
+            </p>
+          ) : (
+            <p className="muted" style={{ marginBottom: 12 }}>
+              Sin sesión, cotiza solo con tu nombre y tu teléfono. Si{' '}
+              <Link to="/login">inicias sesión</Link>, tus datos se toman de tu cuenta.
+            </p>
+          )}
           <form onSubmit={handleCotizar} className="form">
-            <label>
-              Nombre completo
-              <input value={nombre} onChange={(e) => setNombre(e.target.value)} required />
-            </label>
-            <label>
-              Teléfono (WhatsApp)
-              <input value={telefono} onChange={(e) => setTelefono(e.target.value)} required />
-            </label>
-            <label>
-              Fecha de nacimiento
-              <input
-                type="text"
-                value={fechaNacimiento}
-                onChange={(e) => setFechaNacimiento(e.target.value)}
-                placeholder="DD/MM/AAAA"
-                inputMode="numeric"
-                required
-              />
-            </label>
+            {!sesionPaciente && (
+              <>
+                <label>
+                  Nombre completo
+                  <input value={nombre} onChange={(e) => setNombre(e.target.value)} required />
+                </label>
+                <label>
+                  Teléfono (WhatsApp)
+                  <input value={telefono} onChange={(e) => setTelefono(e.target.value)} required />
+                </label>
+              </>
+            )}
             <label>
               Estudio
               <select value={estudioId} onChange={(e) => setEstudioId(e.target.value)}>
