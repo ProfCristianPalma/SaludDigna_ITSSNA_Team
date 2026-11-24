@@ -1,4 +1,4 @@
-import { MOCK_CLINICAS, MOCK_ESTUDIOS, MOCK_PACIENTE_ANA, MOCK_PACIENTES, mockTimeline, mockTramite, mockTramiteParaTelefono } from './mock';
+import { MOCK_CLINICAS, MOCK_ESTUDIOS, MOCK_PACIENTES, mockTimeline, mockTramite, mockTramiteParaTelefono } from './mock';
 import type { Clinica, Estudio, Evento, Journey, Paciente, Tramite } from './types';
 
 export const API_BASE = 'http://localhost:8080/api';
@@ -32,6 +32,99 @@ export function isNetworkError(err: unknown): boolean {
   return !isApiError(err);
 }
 
+// --- Sesión (login / registro reales contra Postgres) --------------------
+export interface Sesion {
+  token: string;
+  usuario: string;
+  rol: string;
+  paciente?: Paciente | null;
+}
+
+export interface PerfilYo {
+  paciente: Paciente | null;
+  usuario: string;
+  rol: string;
+}
+
+const TOKEN_KEY = 'saluddigna-token';
+
+export function getToken(): string | null {
+  return window.localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string): void {
+  window.localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken(): void {
+  window.localStorage.removeItem(TOKEN_KEY);
+}
+
+export function haySesion(): boolean {
+  return getToken() !== null;
+}
+
+function normalizarPaciente(raw: Paciente): Paciente {
+  return {
+    id: String(raw.id),
+    nombre: raw.nombre,
+    telefono: raw.telefono,
+    fechaNacimiento: raw.fechaNacimiento ?? '',
+  };
+}
+
+function normalizarSesion(raw: Sesion): Sesion {
+  return {
+    token: raw.token,
+    usuario: raw.usuario,
+    rol: raw.rol,
+    paciente: raw.paciente ? normalizarPaciente(raw.paciente) : null,
+  };
+}
+
+/** Login de paciente (teléfono o primer nombre + contraseña) o staff. */
+export async function login(usuario: string, password: string): Promise<Sesion> {
+  const sesion = normalizarSesion(
+    await fetchJson<Sesion>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ usuario: usuario.trim(), password }),
+    }),
+  );
+  setToken(sesion.token);
+  return sesion;
+}
+
+export interface RegistroInput {
+  nombre: string;
+  telefono: string;
+  email: string;
+  fechaNacimiento: string;
+  password: string;
+}
+
+/** Registro de paciente nuevo en la BD; hace auto-login al crear la cuenta. */
+export async function registro(input: RegistroInput): Promise<Sesion> {
+  const sesion = normalizarSesion(
+    await fetchJson<Sesion>('/auth/registro', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  );
+  setToken(sesion.token);
+  return sesion;
+}
+
+/** Perfil de la sesión actual (GET /api/auth/yo). 401 si el token no vale. */
+export async function getPerfilYo(): Promise<PerfilYo> {
+  const raw = await fetchJson<PerfilYo>('/auth/yo');
+  return { ...raw, paciente: raw.paciente ? normalizarPaciente(raw.paciente) : null };
+}
+
+/** Cierra la sesión en este navegador. */
+export function logout(): void {
+  clearToken();
+}
+
 /** ¿El backend está vivo? Usa /api/health, sin marcar mock si falla. */
 export async function checkBackend(): Promise<boolean> {
   try {
@@ -56,17 +149,32 @@ async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs = 4000):
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status} en ${path}`);
+    const token = getToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    for (const [k, v] of Object.entries(init?.headers ?? {})) headers[k] = v as string;
+    const res = await fetch(`${API_BASE}${path}`, { ...init, headers, signal: controller.signal });
+    if (!res.ok) throw new ApiError(res.status, await mensajeDeError(res, path));
     markLive();
     return (await res.json()) as T;
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+/** Mensaje del backend (Spring devuelve {"message": "..."}), para mostrarlo en pantalla. */
+async function mensajeDeError(res: Response, path: string): Promise<string> {
+  const texto = await res.text().catch(() => '');
+  if (texto) {
+    try {
+      const json = JSON.parse(texto) as { message?: string; error?: string };
+      if (json.message) return json.message;
+      if (json.error) return json.error;
+    } catch {
+      return texto;
+    }
+  }
+  return `HTTP ${res.status} en ${path}`;
 }
 
 // --- Resolucion de identificadores ---------------------------------------
@@ -586,11 +694,3 @@ export async function enviarWhatsapp(
   }
 }
 
-export async function loginDemo(): Promise<Paciente> {
-  try {
-    return await fetchJson<Paciente>('/auth/demo', { method: 'POST', body: JSON.stringify({}) });
-  } catch {
-    markMock();
-    return MOCK_PACIENTE_ANA;
-  }
-}

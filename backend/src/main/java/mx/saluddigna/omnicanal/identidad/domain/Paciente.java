@@ -1,5 +1,6 @@
 package mx.saluddigna.omnicanal.identidad.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -42,6 +43,15 @@ public class Paciente {
     @Past
     @Column(name = "fecha_nacimiento")
     private LocalDate fechaNacimiento;
+
+    /**
+     * Hash PBKDF2 de la contraseña (ver PasswordService). Nunca en texto
+     * plano y nunca sale en las respuestas JSON (@JsonIgnore).
+     * NULL en cuentas creadas antes de V4 o por la Web sin registro.
+     */
+    @JsonIgnore
+    @Column(name = "password_hash")
+    private String passwordHash;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -101,5 +111,13 @@ public class Paciente {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
     }
 }

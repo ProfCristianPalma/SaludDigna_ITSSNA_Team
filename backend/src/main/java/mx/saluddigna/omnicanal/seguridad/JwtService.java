@@ -5,6 +5,7 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 import javax.crypto.SecretKey;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -21,14 +22,22 @@ public class JwtService {
     }
 
     public String generarToken(String usuario, String rol) {
+        return generarToken(usuario, rol, null);
+    }
+
+    /** Token de paciente: incluye el claim "pacienteId" (UUID como string). */
+    public String generarToken(String usuario, String rol, UUID pacienteId) {
         Date ahora = new Date();
-        return Jwts.builder()
+        var builder = Jwts.builder()
                 .subject(usuario)
                 .claim("rol", rol)
                 .issuedAt(ahora)
                 .expiration(new Date(ahora.getTime() + EXPIRACION_MS))
-                .signWith(key)
-                .compact();
+                .signWith(key);
+        if (pacienteId != null) {
+            builder.claim("pacienteId", pacienteId.toString());
+        }
+        return builder.compact();
     }
 
     public boolean esValido(String token) {
@@ -47,6 +56,19 @@ public class JwtService {
     public String extraerRol(String token) {
         Object rol = extraerClaims(token).get("rol");
         return rol == null ? null : rol.toString();
+    }
+
+    /** UUID del paciente del claim "pacienteId", o null si el token es de staff. */
+    public UUID extraerPacienteId(String token) {
+        Object id = extraerClaims(token).get("pacienteId");
+        if (id == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(id.toString());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private Claims extraerClaims(String token) {

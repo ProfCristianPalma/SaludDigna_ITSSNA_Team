@@ -12,6 +12,7 @@ import mx.saluddigna.omnicanal.catalogo.domain.Estudio;
 import mx.saluddigna.omnicanal.eventos.domain.Canal;
 import mx.saluddigna.omnicanal.identidad.PacienteRepository;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
+import mx.saluddigna.omnicanal.seguridad.PasswordService;
 import mx.saluddigna.omnicanal.tramite.TramiteRepository;
 import mx.saluddigna.omnicanal.tramite.TramiteService;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
@@ -26,11 +27,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * 5 usuarios ejemplo, cada uno en un estado distinto del flujo,
  * para que el asesor, WhatsApp y el Journey tengan casos que mostrar:
- * - Ana Garcia Lopez      +52 222 000 0001  COTIZADO
- * - Luis Hernandez Torres +52 222 111 2233  CLINICA_SELECCIONADA
- * - Maria Fernanda Ruiz   +52 222 444 5566  CONFIRMADO (cita 2026-11-24 10:00)
- * - Carlos Mendoza Vega   +52 238 777 8899  ATENDIDO
- * - Fernanda Lopez Diaz   +52 222 999 0011  DATOS_PENDIENTES
+ * - Ana Garcia Lopez      +52 222 000 0001  COTIZADO              (ana123)
+ * - Luis Hernandez Torres +52 222 111 2233  CLINICA_SELECCIONADA  (luis123)
+ * - Maria Fernanda Ruiz   +52 222 444 5566  CONFIRMADO (cita 2026-11-24 10:00) (maria123)
+ * - Carlos Mendoza Vega   +52 238 777 8899  ATENDIDO              (carlos123)
+ * - Fernanda Lopez Diaz   +52 222 999 0011  DATOS_PENDIENTES      (fernanda123)
+ * Contraseñas demo = primer nombre en minúsculas + 123, guardadas como
+ * hash PBKDF2 (nunca en texto plano). Si el paciente ya tiene hash, no se pisa.
  */
 @Component
 public class DataSeeder implements CommandLineRunner {
@@ -40,15 +43,17 @@ public class DataSeeder implements CommandLineRunner {
     private final ClinicaRepository clinicas;
     private final TramiteRepository tramites;
     private final TramiteService tramiteService;
+    private final PasswordService passwords;
 
     public DataSeeder(PacienteRepository pacientes, EstudioRepository estudios,
                       ClinicaRepository clinicas, TramiteRepository tramites,
-                      TramiteService tramiteService) {
+                      TramiteService tramiteService, PasswordService passwords) {
         this.pacientes = pacientes;
         this.estudios = estudios;
         this.clinicas = clinicas;
         this.tramites = tramites;
         this.tramiteService = tramiteService;
+        this.passwords = passwords;
     }
 
     @Override
@@ -75,18 +80,18 @@ public class DataSeeder implements CommandLineRunner {
         Clinica tehuacan = clinicaPorNombre("Tehuacan");
 
         // 1. Ana — COTIZADO
-        Paciente ana = paciente("Ana Garcia Lopez", "+52 222 000 0001", "ana.demo@saluddigna.test", LocalDate.of(1990, 5, 14));
+        Paciente ana = paciente("Ana Garcia Lopez", "+52 222 000 0001", "ana.demo@saluddigna.test", LocalDate.of(1990, 5, 14), "ana123");
         tramiteCotizado(ana, ultrasonido);
 
         // 2. Luis — CLINICA_SELECCIONADA
-        Paciente luis = paciente("Luis Hernandez Torres", "+52 222 111 2233", "luis.demo@saluddigna.test", LocalDate.of(1985, 3, 22));
+        Paciente luis = paciente("Luis Hernandez Torres", "+52 222 111 2233", "luis.demo@saluddigna.test", LocalDate.of(1985, 3, 22), "luis123");
         Tramite tLuis = tramiteCotizado(luis, tiroideo);
         if (tLuis != null && tLuis.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tLuis.getId(), puebla.getId());
         }
 
         // 3. Maria — CONFIRMADO
-        Paciente maria = paciente("Maria Fernanda Ruiz", "+52 222 444 5566", "maria.demo@saluddigna.test", LocalDate.of(1992, 8, 9));
+        Paciente maria = paciente("Maria Fernanda Ruiz", "+52 222 444 5566", "maria.demo@saluddigna.test", LocalDate.of(1992, 8, 9), "maria123");
         Tramite tMaria = tramiteCotizado(maria, radiografia);
         if (tMaria != null && tMaria.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tMaria.getId(), tehuacan.getId());
@@ -94,7 +99,7 @@ public class DataSeeder implements CommandLineRunner {
         }
 
         // 4. Carlos — ATENDIDO
-        Paciente carlos = paciente("Carlos Mendoza Vega", "+52 238 777 8899", "carlos.demo@saluddigna.test", LocalDate.of(1978, 11, 30));
+        Paciente carlos = paciente("Carlos Mendoza Vega", "+52 238 777 8899", "carlos.demo@saluddigna.test", LocalDate.of(1978, 11, 30), "carlos123");
         Tramite tCarlos = tramiteCotizado(carlos, analisis);
         if (tCarlos != null && tCarlos.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tCarlos.getId(), puebla.getId());
@@ -103,16 +108,26 @@ public class DataSeeder implements CommandLineRunner {
         }
 
         // 5. Fernanda — DATOS_PENDIENTES
-        Paciente fernanda = paciente("Fernanda Lopez Diaz", "+52 222 999 0011", "fernanda.demo@saluddigna.test", LocalDate.of(2001, 6, 17));
+        Paciente fernanda = paciente("Fernanda Lopez Diaz", "+52 222 999 0011", "fernanda.demo@saluddigna.test", LocalDate.of(2001, 6, 17), "fernanda123");
         if (tramites.findByPacienteIdOrderByCreatedAtDesc(fernanda.getId()).isEmpty()) {
             Tramite t = tramiteService.crearTramite(fernanda.getId(), null, Canal.WEB.name());
             tramiteService.marcarDatosPendientes(t.getId(), Map.of("curp", "Pendiente: CURP", "ordenMedica", "Pendiente: orden medica"));
         }
     }
 
-    private Paciente paciente(String nombre, String telefono, String email, LocalDate fechaNacimiento) {
-        return pacientes.findByTelefono(telefono)
+    /**
+     * Busca al paciente por teléfono o lo crea. Si existe sin contraseña
+     * (cuenta de antes de V4 o creada por la Web al cotizar), le asigna
+     * la contraseña demo; si ya tiene hash, NO lo pisa (idempotente).
+     */
+    private Paciente paciente(String nombre, String telefono, String email, LocalDate fechaNacimiento, String password) {
+        Paciente p = pacientes.findByTelefono(telefono)
                 .orElseGet(() -> pacientes.save(new Paciente(nombre, telefono, email, fechaNacimiento)));
+        if (p.getPasswordHash() == null || p.getPasswordHash().isBlank()) {
+            p.setPasswordHash(passwords.hash(password));
+            p = pacientes.save(p);
+        }
+        return p;
     }
 
     private Estudio estudioPorNombre(String fragmento) {

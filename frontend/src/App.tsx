@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react';
-import { Link, NavLink, Route, Routes } from 'react-router-dom';
-import { checkBackend } from './api';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { checkBackend, getPerfilYo, getToken, logout as cerrarSesionApi } from './api';
+import type { PerfilYo } from './api';
 import AppPage from './pages/AppPage';
 import AsesorPage from './pages/AsesorPage';
 import ClinicaPage from './pages/ClinicaPage';
 import JourneyPage from './pages/JourneyPage';
+import LoginPage from './pages/LoginPage';
+import RegistroPage from './pages/RegistroPage';
 import WebPage from './pages/WebPage';
 import WhatsappPage from './pages/WhatsappPage';
 
 export default function App() {
   const [mock, setMock] = useState(false);
+  const [sesion, setSesion] = useState<PerfilYo | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Antes esto se chequeaba UNA sola vez al cargar: si el backend aún
   // estaba arrancando (Docker tarda 30-60 s la primera vez), el banner
@@ -29,10 +35,35 @@ export default function App() {
     };
   }, []);
 
+  // La sesión se restaura al recargar y al cambiar de página (p. ej.
+  // después de loguear en /login y navegar a /app).
+  useEffect(() => {
+    async function restaurar() {
+      if (!getToken()) {
+        setSesion(null);
+        return;
+      }
+      try {
+        setSesion(await getPerfilYo());
+      } catch {
+        setSesion(null);
+      }
+    }
+    void restaurar();
+  }, [location.pathname]);
+
   async function reintentar() {
     const vivo = await checkBackend();
     setMock(!vivo);
   }
+
+  function cerrarSesion() {
+    cerrarSesionApi();
+    setSesion(null);
+    navigate('/login');
+  }
+
+  const nombreSesion = sesion?.paciente?.nombre.split(' ')[0] ?? sesion?.usuario ?? null;
 
   return (
     <div className="app-shell">
@@ -51,6 +82,21 @@ export default function App() {
           <NavLink to="/app">App</NavLink>
           <NavLink to="/clinica">Clínica</NavLink>
           <NavLink to="/journey">Journey</NavLink>
+        </nav>
+        <nav className="nav-links" aria-label="Sesión">
+          {sesion ? (
+            <>
+              <span className="muted">Hola, {nombreSesion}</span>
+              <button type="button" className="btn btn-ghost" onClick={cerrarSesion}>
+                Cerrar sesión
+              </button>
+            </>
+          ) : (
+            <>
+              <NavLink to="/login">Iniciar sesión</NavLink>
+              <NavLink to="/registro">Registrarse</NavLink>
+            </>
+          )}
         </nav>
       </header>
 
@@ -73,6 +119,8 @@ export default function App() {
           <Route path="/clinica" element={<ClinicaPage />} />
           <Route path="/journey/:id" element={<JourneyPage />} />
           <Route path="/journey" element={<JourneyPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/registro" element={<RegistroPage />} />
           <Route path="*" element={<WebPage />} />
         </Routes>
       </main>

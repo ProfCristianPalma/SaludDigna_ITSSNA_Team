@@ -56,16 +56,63 @@ cd backend && mvn spring-boot:run -Dspring-boot.run.profiles=h2
 cd frontend && npm install && npm run dev
 ```
 
-## Credenciales de prueba por rol
+## Credenciales de prueba
 
-| Rol | Usuario | Contraseña | Uso |
+| Paciente | Teléfono (usuario) | Contraseña | Nac. |
 |---|---|---|---|
-| Paciente | `ana` | `ana123` | Ana García López, tel. +52 222 000 0001, nac. 1990-05-14 |
+| Ana García López | `+52 222 000 0001` | `ana123` | 1990-05-14 |
+| Luis Hernández Torres | `+52 222 111 2233` | `luis123` | 1985-03-22 |
+| María Fernanda Ruiz | `+52 222 444 5566` | `maria123` | 1992-08-09 |
+| Carlos Mendoza Vega | `+52 238 777 8899` | `carlos123` | 1978-11-30 |
+| Fernanda López Díaz | `+52 222 999 0011` | `fernanda123` | 2001-06-17 |
+
+| Rol staff | Usuario | Contraseña | Uso |
+|---|---|---|---|
 | Asesor (Call Center) | `asesor` | `asesor123` | Consola `/asesor` |
 | Administrador | `admin` | `admin123` | Tablero `/journey` |
 
-Login: `POST /api/auth/login`. En la demo también vale el header
-`X-Rol: Paciente | Asesor | Administrador` (simplificación documentada).
+También vale el primer nombre como usuario de paciente (`ana` + `ana123`).
+En la demo también vale el header `X-Rol: Paciente | Asesor | Administrador`
+(simplificación documentada).
+
+## Login y registro (BD real)
+
+La App (`/app`) exige sesión: ya no se escribe el teléfono a mano ni se
+muestra a Ana por defecto. El nombre que sale en "Hola, …" es el del
+paciente logueado, y solo se ven **sus** folios.
+
+- **Registro:** `POST /api/auth/registro` con `{nombre, telefono, email,
+  fechaNacimiento, password}` (mínimo 6 caracteres). El teléfono es único:
+  si ya existe con contraseña devuelve 409. Si la cuenta ya existía por
+  haber cotizado en la Web sin registrarse (sin contraseña), el registro la
+  completa en vez de bloquearla. Al registrarse hace auto-login y devuelve
+  `{token, paciente, rol:"PACIENTE"}`.
+- **Login:** `POST /api/auth/login` con `{usuario, password}`. El usuario
+  puede ser el **teléfono** (`+52 222 000 0001`) o el **primer nombre**
+  (`ana`); el staff usa `asesor` / `admin`. Contraseña incorrecta o
+  usuario inexistente → 401. Devuelve `{token, usuario, rol, paciente?}`.
+- **Sesión:** `GET /api/auth/yo` con header `Authorization: Bearer <token>`
+  devuelve `{paciente, usuario, rol}`. El front guarda el token en
+  `localStorage` (`saluddigna-token`) y lo manda en cada llamada; al
+  recargar, la sesión se restaura llamando a `/auth/yo`. "Cerrar sesión"
+  borra el token y vuelve a `/login`.
+- **Contraseñas:** se guardan como hash **PBKDF2WithHmacSHA256** (salt
+  aleatorio de 16 bytes, 65536 iteraciones, 256 bits) en
+  `pacientes.password_hash` (migración Flyway `V4__password_pacientes.sql`,
+  se aplica sola al arrancar, sin `down -v`). El hash **nunca** sale en
+  las respuestas JSON (`@JsonIgnore`). Es grado demo para el hackatón, no
+  producción. El JWT es HS256, expira en 8 h y lleva el claim `pacienteId`.
+
+### Flujo de prueba
+
+1. En `http://localhost:5173/registro` crea un usuario nuevo (nombre,
+   teléfono, fecha de nacimiento, contraseña de 6+ caracteres) → entra
+   directo a `/app` y ve "Hola, {su nombre}" sin folios todavía.
+2. En la Web (`/`) cotiza un estudio: el formulario ya viene prellenado
+   con sus datos → folio nuevo en "Mis folios".
+3. Vuelve a `/app`: su folio aparece ahí, solo el suyo.
+4. Cierra sesión y entra como Luis (`+52 222 111 2233` / `luis123`):
+   la App ahora dice "Hola, Luis" y muestra **sus** folios, no los de Ana.
 
 Datos semilla: 4 estudios (Ultrasonido abdominal $850, Perfil tiroideo $620,
 Radiografía tórax $450, Análisis sangre $380) y 2 clínicas (Clínica Puebla
@@ -181,7 +228,9 @@ datos mock locales: la demo nunca se cae en vivo.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| POST | `/api/auth/login` | Login demo por rol, devuelve JWT |
+| POST | `/api/auth/login` | Login paciente (teléfono o primer nombre) o staff, devuelve JWT + paciente |
+| POST | `/api/auth/registro` | Registro de paciente en BD + auto-login (409 si el teléfono ya tiene contraseña) |
+| GET | `/api/auth/yo` | Perfil de la sesión (Bearer), `{paciente, usuario, rol}` |
 | POST | `/api/pacientes` | Registrar paciente |
 | GET | `/api/pacientes?telefono=` | Resolver identidad por teléfono (+fechaNacimiento) |
 | GET | `/api/pacientes/buscar?nombre=` | Pacientes por nombre (contiene, sin mayúsculas) |
@@ -224,5 +273,7 @@ SaludDigna_ITSSNA_Team/
 
 - El premio de $30,000 del primer lugar está condicionado a firmar la cesión
   de todos los derechos de PI a Salud Digna A.C. (ver PDF del reto).
-- La autenticación demo (`X-Rol`, usuarios `ana`/`asesor`/`admin`) es solo
-  para el hackatón; no usar en producción.
+- La autenticación de pacientes es real contra Postgres (hash PBKDF2 en
+  `password_hash`, JWT con `pacienteId`); solo el staff (`asesor`/`admin`)
+  sigue siendo de demo en código. El fallback `X-Rol` es solo para el
+  hackatón; no usar en producción.

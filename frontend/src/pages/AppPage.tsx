@@ -1,40 +1,47 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getPacientePorTelefono, getTramitesPorTelefono } from '../api';
+import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError } from '../api';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 export default function AppPage() {
-  const [telefono, setTelefono] = useState('+52 222 000 0001');
   const [paciente, setPaciente] = useState<Paciente | null>(null);
   const [tramites, setTramites] = useState<Tramite[]>([]);
   const [mensaje, setMensaje] = useState('');
-  const [cargando, setCargando] = useState(false);
-
-  async function cargar(tel: string) {
-    if (!tel.trim()) return;
-    setCargando(true);
-    setMensaje('');
-    try {
-      const [p, lista] = await Promise.all([
-        getPacientePorTelefono(tel),
-        getTramitesPorTelefono(tel),
-      ]);
-      setPaciente(p);
-      setTramites(lista);
-      if (lista.length === 0) setMensaje('No tienes folios todavía. Cotiza un estudio en la web y aparecerá aquí.');
-    } catch {
-      setPaciente(null);
-      setTramites([]);
-      setMensaje('No encontré un paciente con ese teléfono. Verifica el número.');
-    } finally {
-      setCargando(false);
-    }
-  }
+  const [sinSesion, setSinSesion] = useState(false);
+  const [cargando, setCargando] = useState(true);
 
   useEffect(() => {
-    void cargar('+52 222 000 0001');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    async function cargar() {
+      // Sin sesión no hay paciente que mostrar: la App exige login.
+      if (!getToken()) {
+        setSinSesion(true);
+        setCargando(false);
+        return;
+      }
+      try {
+        const perfil = await getPerfilYo();
+        if (!perfil.paciente) {
+          setMensaje('Esta vista es para pacientes. Tu sesión es de staff: usa Asesor o Clínica.');
+          setCargando(false);
+          return;
+        }
+        setPaciente(perfil.paciente);
+        // Solo los folios de ESTE paciente, por su teléfono de sesión.
+        const lista = await getTramitesPorTelefono(perfil.paciente.telefono);
+        setTramites(lista);
+        if (lista.length === 0) setMensaje('No tienes folios todavía. Cotiza un estudio en la web y aparecerá aquí.');
+      } catch (err) {
+        if (isApiError(err) && err.status === 401) {
+          setSinSesion(true);
+        } else {
+          setMensaje('No se pudo cargar tu perfil. Verifica que el backend esté arriba.');
+        }
+      } finally {
+        setCargando(false);
+      }
+    }
+    void cargar();
   }, []);
 
   const primerNombre = paciente?.nombre.split(' ')[0] ?? 'Hola';
@@ -48,73 +55,75 @@ export default function AppPage() {
           <strong>Salud Digna</strong>
         </div>
         <div className="phone-body">
-          <h1>Hola, {primerNombre} 👋</h1>
-          <p className="muted">Tu salud, en una sola conversación.</p>
-
-          <form
-            className="form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void cargar(telefono);
-            }}
-          >
-            <label>
-              Tu teléfono (WhatsApp)
-              <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="+52 222 000 0001" />
-            </label>
-            <button type="submit" className="btn btn-primary" disabled={cargando}>
-              {cargando ? 'Buscando…' : 'Ver mis citas'}
-            </button>
-          </form>
-
-          {mensaje && <p className="notice" role="status">{mensaje}</p>}
-
-          {tramites.length === 0 && !mensaje && (
-            <section className="card cita-card">
-              <p>No hay una cita cargada todavía.</p>
-              <Link className="btn btn-primary" to="/">Cotizar en la web</Link>
-            </section>
-          )}
-
-          {tramites.map((t) => (
-            <section key={t.id} className="card cita-card">
-              <p className="muted">Tu cita</p>
-              <h2>{t.estudio.nombre}</h2>
-              <p>
-                Folio: <strong>{t.folio}</strong>
-              </p>
-              <p>
-                <EstadoBadge estado={t.estado} />
-              </p>
-              <p>
-                Precio: <strong>${t.precioCotizado}</strong>
-              </p>
-              <p>Clínica: {t.clinica ? `${t.clinica.nombre} (${t.clinica.ciudad})` : 'Por elegir'}</p>
-              <p>Fecha: {t.fechaCita ?? 'Por confirmar'}</p>
+          {sinSesion ? (
+            <>
+              <h1>Hola 👋</h1>
+              <p className="muted">Para ver tus citas, primero inicia sesión con tu teléfono y tu contraseña.</p>
               <div className="actions">
-                <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
-                  Ver mi Journey
-                </Link>
+                <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
+                <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
               </div>
-            </section>
-          ))}
+              <p className="muted">Cuenta de prueba: +52 222 000 0001 / ana123</p>
+            </>
+          ) : (
+            <>
+              <h1>Hola, {primerNombre} 👋</h1>
+              <p className="muted">Tu salud, en una sola conversación.</p>
+              {paciente && <p className="muted">{paciente.nombre} · {paciente.telefono}</p>}
 
-          <section className="card">
-            <h2>Próximos pasos</h2>
-            <ol className="steps-list">
-              <li>Elige tu clínica en WhatsApp o en la web.</li>
-              <li>Confirma fecha y hora de tu cita.</li>
-              <li>Llega 15 minutos antes con tu folio {tramitePrincipal?.folio ?? 'SD-2026-0001'}.</li>
-              <li>En clínica, haz check-in con ese folio.</li>
-            </ol>
-          </section>
+              {cargando && <p className="muted">Cargando tus citas…</p>}
+              {mensaje && <p className="notice" role="status">{mensaje}</p>}
 
-          <div className="actions">
-            <Link className="btn btn-primary" to="/whatsapp">Abrir WhatsApp</Link>
-            <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(tramitePrincipal?.folio ?? 'SD-2026-0001')}`}>
-              Ver mi Journey
-            </Link>
-          </div>
+              {tramites.length === 0 && !mensaje && !cargando && (
+                <section className="card cita-card">
+                  <p>No hay una cita cargada todavía.</p>
+                  <Link className="btn btn-primary" to="/">Cotizar en la web</Link>
+                </section>
+              )}
+
+              {tramites.map((t) => (
+                <section key={t.id} className="card cita-card">
+                  <p className="muted">Tu cita</p>
+                  <h2>{t.estudio.nombre}</h2>
+                  <p>
+                    Folio: <strong>{t.folio}</strong>
+                  </p>
+                  <p>
+                    <EstadoBadge estado={t.estado} />
+                  </p>
+                  <p>
+                    Precio: <strong>${t.precioCotizado}</strong>
+                  </p>
+                  <p>Clínica: {t.clinica ? `${t.clinica.nombre} (${t.clinica.ciudad})` : 'Por elegir'}</p>
+                  <p>Fecha: {t.fechaCita ?? 'Por confirmar'}</p>
+                  <div className="actions">
+                    <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
+                      Ver mi Journey
+                    </Link>
+                  </div>
+                </section>
+              ))}
+
+              <section className="card">
+                <h2>Próximos pasos</h2>
+                <ol className="steps-list">
+                  <li>Elige tu clínica en WhatsApp o en la web.</li>
+                  <li>Confirma fecha y hora de tu cita.</li>
+                  <li>Llega 15 minutos antes con tu folio {tramitePrincipal?.folio ?? '—'}.</li>
+                  <li>En clínica, haz check-in con ese folio.</li>
+                </ol>
+              </section>
+
+              <div className="actions">
+                <Link className="btn btn-primary" to="/whatsapp">Abrir WhatsApp</Link>
+                {tramitePrincipal && (
+                  <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(tramitePrincipal.folio)}`}>
+                    Ver mi Journey
+                  </Link>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

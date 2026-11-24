@@ -60,6 +60,9 @@ public class SecurityConfig extends OncePerRequestFilter {
             }
             request.setAttribute("usuario", jwtService.extraerUsuario(token));
             request.setAttribute("rol", jwtService.extraerRol(token));
+            if (jwtService.extraerPacienteId(token) != null) {
+                request.setAttribute("pacienteId", jwtService.extraerPacienteId(token));
+            }
         } else {
             String rolHeader = request.getHeader("X-Rol");
             if (rolHeader != null && !rolHeader.isBlank()) {

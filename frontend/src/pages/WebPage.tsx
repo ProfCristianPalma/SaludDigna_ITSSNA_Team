@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { cotizar, crearTramite, getClinicas, getEstudios, getTramitesPorTelefono, seleccionarClinica } from '../api';
+import { cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorTelefono, seleccionarClinica } from '../api';
 import { MOCK_PACIENTE_ANA } from '../mock';
 import type { Clinica, Estudio, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
@@ -38,7 +38,27 @@ export default function WebPage() {
     getClinicas().then(setClinicas);
     const guardado = window.localStorage.getItem(FOLIO_KEY);
     if (guardado) setMensaje(`Tienes un trámite guardado: ${guardado}. Puedes retomarlo en WhatsApp o en Journey.`);
-    void cargarFolios(MOCK_PACIENTE_ANA.telefono);
+    // Si hay sesión de paciente, prellena con SUS datos (se pueden cambiar).
+    async function prellenar() {
+      if (!getToken()) {
+        void cargarFolios(MOCK_PACIENTE_ANA.telefono);
+        return;
+      }
+      try {
+        const perfil = await getPerfilYo();
+        if (perfil.paciente) {
+          setNombre(perfil.paciente.nombre);
+          setTelefono(perfil.paciente.telefono);
+          if (perfil.paciente.fechaNacimiento) setFechaNacimiento(perfil.paciente.fechaNacimiento);
+          void cargarFolios(perfil.paciente.telefono);
+          return;
+        }
+      } catch {
+        // Sin sesión válida: se queda el ejemplo de Ana.
+      }
+      void cargarFolios(MOCK_PACIENTE_ANA.telefono);
+    }
+    void prellenar();
   }, []);
 
   const estudioSeleccionado = estudios.find((e) => e.id === estudioId);
