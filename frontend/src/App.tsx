@@ -4,7 +4,9 @@ import { checkBackend, getPerfilYo, getToken, logout as cerrarSesionApi } from '
 import type { PerfilYo } from './api';
 import AppPage from './pages/AppPage';
 import AsesorPage from './pages/AsesorPage';
+import BienvenidaPage from './pages/BienvenidaPage';
 import ClinicaPage from './pages/ClinicaPage';
+import HistorialPage from './pages/HistorialPage';
 import JourneyPage from './pages/JourneyPage';
 import LoginPage from './pages/LoginPage';
 import RegistroPage from './pages/RegistroPage';
@@ -76,10 +78,12 @@ export default function App() {
           </span>
         </Link>
         <nav className="nav-links" aria-label="Canales">
-          <NavLink to="/">Web</NavLink>
+          <NavLink to="/">Inicio</NavLink>
+          <NavLink to="/cotizar">Cotizar</NavLink>
           <NavLink to="/whatsapp">WhatsApp</NavLink>
           <NavLink to="/asesor">Asesor</NavLink>
           <NavLink to="/app">App</NavLink>
+          <NavLink to="/historial">Historial</NavLink>
           <NavLink to="/clinica">Clínica</NavLink>
           <NavLink to="/journey">Journey</NavLink>
         </nav>
@@ -112,16 +116,19 @@ export default function App() {
 
       <main className="container">
         <Routes>
-          <Route path="/" element={<WebPage />} />
+          <Route path="/" element={<BienvenidaPage />} />
+          <Route path="/cotizar" element={<WebPage />} />
+          <Route path="/web" element={<WebPage />} />
           <Route path="/whatsapp" element={<WhatsappPage />} />
           <Route path="/asesor" element={<AsesorPage />} />
           <Route path="/app" element={<AppPage />} />
+          <Route path="/historial" element={<HistorialPage />} />
           <Route path="/clinica" element={<ClinicaPage />} />
           <Route path="/journey/:id" element={<JourneyPage />} />
           <Route path="/journey" element={<JourneyPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/registro" element={<RegistroPage />} />
-          <Route path="*" element={<WebPage />} />
+          <Route path="*" element={<BienvenidaPage />} />
         </Routes>
       </main>
 

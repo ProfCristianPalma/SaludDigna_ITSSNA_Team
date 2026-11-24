@@ -33,6 +33,22 @@ export function isNetworkError(err: unknown): boolean {
 }
 
 // --- Sesión (login / registro reales contra Postgres) --------------------
+// --- Teléfonos a 10 dígitos, sin +52 --------------------------------------
+// Regla momentánea: todos los teléfonos se guardan y se comparan a
+// 10 dígitos. Misma regla que TelefonoUtil en el backend: se quitan
+// espacios, guiones y paréntesis, y el prefijo +52 / 0052 / 52 inicial
+// solo cuando sobran dígitos.
+export function normalizarTelefono(telefono: string | null | undefined): string {
+  if (!telefono) return '';
+  let digitos = telefono.replace(/\D/g, '');
+  while (digitos.length > 10) {
+    if (digitos.startsWith('0052')) digitos = digitos.substring(4);
+    else if (digitos.startsWith('52')) digitos = digitos.substring(2);
+    else break;
+  }
+  return digitos;
+}
+
 export interface Sesion {
   token: string;
   usuario: string;
@@ -82,12 +98,15 @@ function normalizarSesion(raw: Sesion): Sesion {
   };
 }
 
-/** Login de paciente (teléfono o primer nombre + contraseña) o staff. */
+/** Login de paciente (teléfono a 10 dígitos o primer nombre + contraseña) o staff. */
 export async function login(usuario: string, password: string): Promise<Sesion> {
+  // Solo se normaliza si parece teléfono (7+ dígitos); "ana"/"asesor" se mandan tal cual.
+  const digitos = normalizarTelefono(usuario);
+  const usuarioFinal = /^\d{7,}$/.test(digitos) ? digitos : usuario.trim();
   const sesion = normalizarSesion(
     await fetchJson<Sesion>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ usuario: usuario.trim(), password }),
+      body: JSON.stringify({ usuario: usuarioFinal, password }),
     }),
   );
   setToken(sesion.token);
@@ -107,7 +126,7 @@ export async function registro(input: RegistroInput): Promise<Sesion> {
   const sesion = normalizarSesion(
     await fetchJson<Sesion>('/auth/registro', {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, telefono: normalizarTelefono(input.telefono) }),
     }),
   );
   setToken(sesion.token);
@@ -385,7 +404,7 @@ export async function getTramitePorFolio(folio: string): Promise<Tramite> {
 export async function getTramitesPorTelefono(telefono: string): Promise<Tramite[]> {
   try {
     const list = await fetchJson<Record<string, unknown>[]>(
-      `/tramites?telefono=${encodeURIComponent(telefono.trim())}`,
+      `/tramites?telefono=${encodeURIComponent(normalizarTelefono(telefono))}`,
     );
     return list.map(normalizeTramite);
   } catch (err) {
@@ -416,7 +435,7 @@ export async function getTramitesPorEstado(estado: string): Promise<Tramite[]> {
 /** Paciente por teléfono (GET /api/pacientes?telefono=). */
 export async function getPacientePorTelefono(telefono: string): Promise<Paciente> {
   try {
-    return await fetchJson<Paciente>(`/pacientes?telefono=${encodeURIComponent(telefono.trim())}`);
+    return await fetchJson<Paciente>(`/pacientes?telefono=${encodeURIComponent(normalizarTelefono(telefono))}`);
   } catch (err) {
     if (isApiError(err)) throw err;
     markMock();
@@ -424,6 +443,30 @@ export async function getPacientePorTelefono(telefono: string): Promise<Paciente
     if (!t?.paciente) throw err;
     return t.paciente;
   }
+}
+
+/** Cita de clínica (DTO plano) para el tablero de recepción. */
+export interface CitaClinica {
+  folio: string;
+  tramiteId: string;
+  pacienteNombre: string;
+  pacienteTelefono: string;
+  estudioNombre: string;
+  precio: number | null;
+  clinicaNombre: string | null;
+  clinicaCiudad: string | null;
+  fechaCita: string | null;
+  estado: string;
+}
+
+/**
+ * Citas de Clínica desde GET /api/clinica/citas (DTOs planos, no entidades JPA).
+ * estado: 'CONFIRMADO' por defecto; 'ATENDIDO', 'TODOS' o '' traen todos los estados.
+ */
+export async function getCitasClinica(estado: string = 'CONFIRMADO'): Promise<CitaClinica[]> {
+  const query = estado === 'TODOS' || !estado ? '' : `?estado=${encodeURIComponent(estado)}`;
+  const list = await fetchJson<CitaClinica[]>(`/clinica/citas${query}`);
+  return list.map((c) => ({ ...c, precio: c.precio == null ? null : Number(c.precio) }));
 }
 
 /** Pacientes cuyo nombre contiene el texto (GET /api/pacientes/buscar?nombre=). */
@@ -551,6 +594,7 @@ export interface CrearTramiteInput {
 }
 
 export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
+  const telefono = normalizarTelefono(input.telefono);
   try {
     // El backend crea trámites por pacienteId (UUID), no por nombre/teléfono.
     // 1) Busca al paciente por teléfono, 2) si no existe lo registra,
@@ -558,7 +602,7 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
     let paciente: Paciente;
     try {
       paciente = await fetchJson<Paciente>(
-        `/pacientes?telefono=${encodeURIComponent(input.telefono)}&fechaNacimiento=${encodeURIComponent(input.fechaNacimiento)}`,
+        `/pacientes?telefono=${encodeURIComponent(telefono)}&fechaNacimiento=${encodeURIComponent(input.fechaNacimiento)}`,
       );
     } catch (err) {
       // Si el telefono ya existe pero la fecha no coincidio, el POST daria 409:
@@ -568,7 +612,7 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
           method: 'POST',
           body: JSON.stringify({
             nombre: input.nombre,
-            telefono: input.telefono,
+            telefono,
             email: '',
             fechaNacimiento: input.fechaNacimiento,
           }),
@@ -576,7 +620,7 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
       } catch (err2) {
         if (isApiError(err2) && err2.status === 409) {
           paciente = await fetchJson<Paciente>(
-            `/pacientes?telefono=${encodeURIComponent(input.telefono)}`,
+            `/pacientes?telefono=${encodeURIComponent(telefono)}`,
           );
         } else {
           throw err2;
@@ -596,7 +640,7 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
     markMock();
     const estudio = MOCK_ESTUDIOS.find((e) => e.id === input.estudioId) ?? MOCK_ESTUDIOS[0];
     const t = mockTramite();
-    t.paciente = { id: 'pac-ana-001', nombre: input.nombre, telefono: input.telefono, fechaNacimiento: input.fechaNacimiento };
+    t.paciente = { id: 'pac-ana-001', nombre: input.nombre, telefono, fechaNacimiento: input.fechaNacimiento };
     t.estudio = estudio;
     t.precioCotizado = estudio.precio;
     t.estado = 'INICIADO';
@@ -666,13 +710,14 @@ export async function enviarWhatsapp(
   telefono: string,
   mensaje: string,
 ): Promise<{ respuesta: string; tramite: Tramite | null; tramites?: Tramite[] }> {
+  const tel = normalizarTelefono(telefono);
   try {
     // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
     // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso } y,
     // si el paciente tiene varios folios activos y no dijo cual, { tramites }.
     const raw = await fetchJson<Record<string, unknown>>('/canales/whatsapp/mensaje', {
       method: 'POST',
-      body: JSON.stringify({ telefono, mensaje }),
+      body: JSON.stringify({ telefono: tel, mensaje }),
     });
     const tramiteRaw = raw.tramite as Record<string, unknown> | null | undefined;
     const tramitesRaw = raw.tramites as Record<string, unknown>[] | undefined;

@@ -131,7 +131,7 @@ la versión vieja y parece que tu cambio "no hizo nada".
 
 ## Credenciales de prueba
 
-- Paciente: `ana` / `ana123` — Ana, tel. +52 222 000 0001
+- Paciente: `ana` / `ana123` — Ana, tel. 2220000001
 - Asesor: `asesor` / `asesor123`
 - Admin: `admin` / `admin123`
 - Trámite demo: folio `SD-2026-0001`, estado COTIZADO

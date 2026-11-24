@@ -60,11 +60,11 @@ cd frontend && npm install && npm run dev
 
 | Paciente | Teléfono (usuario) | Contraseña | Nac. |
 |---|---|---|---|
-| Ana García López | `+52 222 000 0001` | `ana123` | 1990-05-14 |
-| Luis Hernández Torres | `+52 222 111 2233` | `luis123` | 1985-03-22 |
-| María Fernanda Ruiz | `+52 222 444 5566` | `maria123` | 1992-08-09 |
-| Carlos Mendoza Vega | `+52 238 777 8899` | `carlos123` | 1978-11-30 |
-| Fernanda López Díaz | `+52 222 999 0011` | `fernanda123` | 2001-06-17 |
+| Ana García López | `2220000001` | `ana123` | 1990-05-14 |
+| Luis Hernández Torres | `2221112233` | `luis123` | 1985-03-22 |
+| María Fernanda Ruiz | `2224445566` | `maria123` | 1992-08-09 |
+| Carlos Mendoza Vega | `2387778899` | `carlos123` | 1978-11-30 |
+| Fernanda López Díaz | `2229990011` | `fernanda123` | 2001-06-17 |
 
 | Rol staff | Usuario | Contraseña | Uso |
 |---|---|---|---|
@@ -74,6 +74,44 @@ cd frontend && npm install && npm run dev
 También vale el primer nombre como usuario de paciente (`ana` + `ana123`).
 En la demo también vale el header `X-Rol: Paciente | Asesor | Administrador`
 (simplificación documentada).
+
+
+## Navegación (mapa de rutas)
+
+La app arranca en `/` (Bienvenida). Desde ahí se va a todo lo demás:
+
+| Ruta | Ventana | Qué es |
+|---|---|---|
+| `/` | Bienvenida | Presentación de Salud Digna y de cada canal; botones a login, registro y cotizar |
+| `/cotizar` (alias `/web`) | Web | Cotizar un estudio y crear un folio nuevo |
+| `/login` | Iniciar sesión | Ventana separada; tras entrar, va a `/app` |
+| `/registro` | Crear cuenta | Ventana separada; tras crearla, entra directo a `/app` |
+| `/app` | App | Tus citas (exige sesión, muestra tu nombre y solo tus folios) |
+| `/historial` | Mi historial | TODOS tus folios, del más reciente al más viejo |
+| `/whatsapp` | WhatsApp | Continuar un trámite con el bot (con tu sesión, arranca con tus datos) |
+| `/asesor` | Call Center | Consola del asesor (busca por teléfono, folio o nombre) |
+| `/clinica` | Clínica | Recepción: citas confirmadas de TODOS los pacientes |
+| `/journey` | Journey | Tu recorrido paso a paso, en tiempo real |
+
+Login y Registro son ventanas separadas y se puede navegar entre ellas
+y al inicio: Login tiene "Crear cuenta" y "Volver a inicio"; Registro
+tiene "Iniciar sesión" y "Volver a inicio".
+
+## Teléfonos a 10 dígitos, sin +52 (momentáneo)
+
+Todos los teléfonos se guardan y se comparan a **10 dígitos, sin +52**:
+`2220000001` en vez de `+52 222 000 0001`. El backend normaliza cada
+teléfono que entra (`TelefonoUtil`, misma regla en `api.ts`:
+`normalizarTelefono()`): quita espacios, guiones y paréntesis, y el
+prefijo +52 / 0052 / 52 solo cuando sobran dígitos. Antes, "+52 ..." y
+"222..." eran pacientes distintos en la BD y los folios se iban a un
+duplicado: por eso un historial por teléfono podía salir vacío aunque
+los folios sí existieran. La migración Flyway
+`V5__telefonos_sin_lada.sql` convierte los teléfonos ya guardados
+(para bases nuevas, V2/V3 ya siembran a 10 dígitos). Si un paciente
+estaba duplicado (+52 y sin +52), V5 solo normaliza la fila más
+antigua; revisa la lista en `GET /api/pacientes` y borra el duplicado
+sin trámites.
 
 ## Login y registro (BD real)
 
@@ -88,7 +126,7 @@ paciente logueado, y solo se ven **sus** folios.
   completa en vez de bloquearla. Al registrarse hace auto-login y devuelve
   `{token, paciente, rol:"PACIENTE"}`.
 - **Login:** `POST /api/auth/login` con `{usuario, password}`. El usuario
-  puede ser el **teléfono** (`+52 222 000 0001`) o el **primer nombre**
+  puede ser el **teléfono a 10 dígitos** (`2220000001`) o el **primer nombre**
   (`ana`); el staff usa `asesor` / `admin`. Contraseña incorrecta o
   usuario inexistente → 401. Devuelve `{token, usuario, rol, paciente?}`.
 - **Sesión:** `GET /api/auth/yo` con header `Authorization: Bearer <token>`
@@ -108,10 +146,10 @@ paciente logueado, y solo se ven **sus** folios.
 1. En `http://localhost:5173/registro` crea un usuario nuevo (nombre,
    teléfono, fecha de nacimiento, contraseña de 6+ caracteres) → entra
    directo a `/app` y ve "Hola, {su nombre}" sin folios todavía.
-2. En la Web (`/`) cotiza un estudio: el formulario ya viene prellenado
+2. En la Web (`/cotizar`) cotiza un estudio: el formulario ya viene prellenado
    con sus datos → folio nuevo en "Mis folios".
 3. Vuelve a `/app`: su folio aparece ahí, solo el suyo.
-4. Cierra sesión y entra como Luis (`+52 222 111 2233` / `luis123`):
+4. Cierra sesión y entra como Luis (`2221112233` / `luis123`):
    la App ahora dice "Hola, Luis" y muestra **sus** folios, no los de Ana.
 
 Datos semilla: 4 estudios (Ultrasonido abdominal $850, Perfil tiroideo $620,
@@ -122,11 +160,11 @@ Centro, Clínica Salud Digna Tehuacán).
 
 | # | Paciente | Teléfono | Nac. | Estudio | Estado |
 |---|---|---|---|---|---|
-| 1 | Ana García López | +52 222 000 0001 | 1990-05-14 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
-| 2 | Luis Hernández Torres | +52 222 111 2233 | 1985-03-22 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
-| 3 | María Fernanda Ruiz | +52 222 444 5566 | 1992-08-09 | Radiografía tórax $450 | CONFIRMADO (cita 2026-11-24 10:00) |
-| 4 | Carlos Mendoza Vega | +52 238 777 8899 | 1978-11-30 | Análisis sangre $380 | ATENDIDO |
-| 5 | Fernanda López Díaz | +52 222 999 0011 | 2001-06-17 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
+| 1 | Ana García López | 2220000001 | 1990-05-14 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
+| 2 | Luis Hernández Torres | 2221112233 | 1985-03-22 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
+| 3 | María Fernanda Ruiz | 2224445566 | 1992-08-09 | Radiografía tórax $450 | CONFIRMADO (cita 2026-11-24 10:00) |
+| 4 | Carlos Mendoza Vega | 2387778899 | 1978-11-30 | Análisis sangre $380 | ATENDIDO |
+| 5 | Fernanda López Díaz | 2229990011 | 2001-06-17 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
 
 Se siembran con Flyway `V2__seed.sql` + `V3__usuarios_ejemplo.sql` y con
 `DataSeeder` (idempotente, crea el trámite de cada uno en su estado).
@@ -172,7 +210,7 @@ leen y escriben sobre los mismos trámites.
 
 ### Probar 2 folios de un mismo usuario
 
-1. En la Web, como Ana (+52 222 000 0001), cotiza Ultrasonido → folio nuevo.
+1. En la Web (`/cotizar`), como Ana (2220000001), cotiza Ultrasonido → folio nuevo.
 2. Con el mismo teléfono, cotiza Perfil tiroideo → **otro folio nuevo**.
 3. En "Mis folios" deben aparecer los 2, cada uno con su estudio y precio.
 4. En WhatsApp escribe "hola": el bot lista los 2 folios; responde
@@ -180,6 +218,49 @@ leen y escriben sobre los mismos trámites.
 5. En el asesor busca `Ana` o su teléfono: ve los 2 folios y elige uno.
 6. En Clínica, tras confirmar una cita, atiende ese folio: solo ese pasa
    a ATENDIDO; el otro sigue en su estado.
+
+
+## Historial de folios vs Clínica (no son lo mismo)
+
+- **Historial (`/historial`)**: TODOS los folios de UN solo paciente, el
+  logueado. Exige sesión, muestra su nombre y teléfono, y cada folio con
+  estudio, precio, estado, clínica, fecha de cita y canal de origen,
+  del más reciente al más viejo, con enlace a su Journey y, si está
+  COTIZADO, botón "Continuar en WhatsApp" que abre `/whatsapp` con ese
+  folio. La App (`/app`) muestra lo mismo en formato móvil, con botón
+  "Actualizar" y recarga al volver a la página; en Web, "Mis folios"
+  enlaza también al Historial.
+- **Clínica (`/clinica`)**: recepción con las citas confirmadas de
+  TODOS los pacientes. Se carga desde el DTO plano
+  `GET /api/clinica/citas?estado=CONFIRMADO` (o `?estado=ATENDIDO`, o
+  sin `estado` para todos), que devuelve folio, tramiteId,
+  pacienteNombre, pacienteTelefono, estudioNombre, precio,
+  clinicaNombre, clinicaCiudad, fechaCita y estado, construido en el
+  servicio cargando explícitamente paciente/estudio/clínica: así la
+  respuesta nunca depende de serializar una entidad JPA con paciente
+  LAZY. La página tiene filtros Confirmados / Atendidos / Todos, un
+  buscador por folio, teléfono o nombre, y muestra el error REAL
+  (status HTTP + mensaje del backend) si la carga falla. El check-in
+  queda en el log de eventos y "Registrar atención" llama a
+  `POST /api/tramites/{id}/atender` (CONFIRMADO → ATENDIDO).
+- **Por qué Clínica salía vacía antes:** el endpoint viejo
+  `GET /api/tramites?estado=` solo existe desde el cambio de
+  varios folios; con un backend sin reconstruir tras `git pull`
+  devolvía 400 y el front solo mostraba el mensaje genérico.
+  (La serialización LAZY no era la causa: `spring.jpa.open-in-view=true`
+  está activado.) El DTO es ahora el camino principal por robustez, y
+  el endpoint viejo sigue intacto.
+
+### WhatsApp con sesión
+
+Si hay sesión, `/whatsapp` arranca con EL paciente logueado: su nombre,
+su teléfono (10 dígitos) y sus folios activos, con botón por folio para
+seguir con ese trámite. "Abrir WhatsApp" desde App guarda el teléfono
+de sesión en `localStorage` (`saluddigna-wa-telefono`); "Continuar en
+WhatsApp" desde Historial guarda además el folio
+(`saluddigna-wa-folio`) y el bot continúa con ese folio. Sin sesión,
+WhatsApp sigue con Ana de ejemplo como antes. La máquina de estados
+del bot no cambió.
 
 ## Si ves "Modo demo sin backend"
 
@@ -205,13 +286,13 @@ curl http://localhost:8080/api/health
 
 ## Demo de Ana en 5 pasos
 
-1. **Web** (`/`): como Ana, cotiza el Ultrasonido abdominal ($850), elige
+1. **Web** (`/cotizar`): como Ana, cotiza el Ultrasonido abdominal ($850), elige
    Clínica Puebla Centro y pulsa "Cerrar sin confirmar (simular interrupción)".
    Anota el folio `SD-2026-0001`.
 2. **WhatsApp** (`/whatsapp`): escribe "quiero continuar mi trámite". El bot
    reconoce a Ana por su teléfono, recupera el trámite pendiente y le ofrece
    seguir donde se quedó. El evento `canal.cambiado` queda en el log.
-3. **Call Center** (`/asesor`): busca por teléfono `+52 222 000 0001` o por
+3. **Call Center** (`/asesor`): busca por teléfono `2220000001` o por
    folio. El asesor ve estudio, clínica, precio y datos pendientes **sin
    pedirle a Ana que repita nada**. Completa el dato pendiente si hace falta.
 4. **App** (`/app`): Ana confirma su cita (fecha y hora) y ve la cita
@@ -240,6 +321,7 @@ datos mock locales: la demo nunca se cae en vivo.
 | GET | `/api/tramites/folio/{folio}` | Trámite por folio (ej. SD-2026-0001) |
 | GET | `/api/tramites?telefono=` | Trámites de un paciente |
 | GET | `/api/tramites?estado=` | Trámites en un estado (ej. CONFIRMADO) |
+| GET | `/api/clinica/citas?estado=` | Citas de Clínica como DTOs planos (CONFIRMADO por defecto; ATENDIDO o sin estado = todos) |
 | POST | `/api/tramites/{id}/cotizar` | Cotizar estudio |
 | POST | `/api/tramites/{id}/seleccionar-clinica` | Elegir clínica |
 | POST | `/api/tramites/{id}/confirmar` | Confirmar cita |

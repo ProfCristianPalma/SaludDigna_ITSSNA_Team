@@ -41,7 +41,7 @@ export default function LoginPage() {
             <input
               value={usuario}
               onChange={(e) => setUsuario(e.target.value)}
-              placeholder="+52 222 000 0001 o ana"
+              placeholder="2220000001 o ana"
               autoComplete="username"
               required
             />
@@ -65,14 +65,17 @@ export default function LoginPage() {
         <p className="muted" style={{ marginTop: 12 }}>
           ¿No tienes cuenta? <Link to="/registro">Regístrate aquí</Link>.
         </p>
+        <p className="muted">
+          <Link to="/">← Volver a inicio</Link>
+        </p>
       </section>
 
       <section className="card" style={{ maxWidth: 480, marginTop: 16 }}>
         <h2>Cuentas de prueba</h2>
         <ul>
-          <li>Ana García López — teléfono <code>+52 222 000 0001</code> — contraseña <code>ana123</code></li>
-          <li>Luis Hernández Torres — <code>+52 222 111 2233</code> — <code>luis123</code></li>
-          <li>María Fernanda Ruiz — <code>+52 222 444 5566</code> — <code>maria123</code></li>
+          <li>Ana García López — teléfono <code>2220000001</code> — contraseña <code>ana123</code></li>
+          <li>Luis Hernández Torres — <code>2221112233</code> — <code>luis123</code></li>
+          <li>María Fernanda Ruiz — <code>2224445566</code> — <code>maria123</code></li>
           <li>Asesor — usuario <code>asesor</code> — <code>asesor123</code></li>
         </ul>
       </section>

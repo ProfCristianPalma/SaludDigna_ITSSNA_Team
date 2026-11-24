@@ -200,6 +200,42 @@ public class TramiteService {
         return tramites.findByEstado(estado);
     }
 
+    /**
+     * Citas para el tablero de Clínica como DTOs planos (no entidades JPA).
+     * Se construyen dentro de la transacción, cargando explícitamente
+     * paciente, estudio y clínica, así la serialización nunca depende
+     * de un proxy LAZY. Si estado es null, devuelve todas las citas.
+     */
+    @Transactional(readOnly = true)
+    public List<CitaClinicaDTO> listarCitasClinica(EstadoTramite estado) {
+        List<Tramite> lista = estado == null ? tramites.findAll() : tramites.findByEstado(estado);
+        return lista.stream().map(t -> {
+            Paciente paciente = t.getPaciente();
+            String estudioNombre = t.getEstudioId() == null ? "Sin estudio"
+                    : estudios.findById(t.getEstudioId()).map(Estudio::getNombre).orElse("Sin estudio");
+            String clinicaNombre = null;
+            String clinicaCiudad = null;
+            if (t.getClinicaId() != null) {
+                Clinica c = clinicas.findById(t.getClinicaId()).orElse(null);
+                if (c != null) {
+                    clinicaNombre = c.getNombre();
+                    clinicaCiudad = c.getCiudad();
+                }
+            }
+            return new CitaClinicaDTO(
+                    t.getFolio(),
+                    t.getId().toString(),
+                    paciente == null ? "—" : paciente.getNombre(),
+                    paciente == null ? "—" : paciente.getTelefono(),
+                    estudioNombre,
+                    t.getPrecioCotizado(),
+                    clinicaNombre,
+                    clinicaCiudad,
+                    t.getFechaCita(),
+                    t.getEstado().name());
+        }).toList();
+    }
+
     @Transactional(readOnly = true)
     public List<Tramite> listarTodos() {
         return tramites.findAll();
@@ -216,7 +252,8 @@ public class TramiteService {
 
     @Transactional(readOnly = true)
     public List<Tramite> listarPorTelefono(String telefono) {
-        Paciente paciente = pacientes.findByTelefono(telefono)
+        Paciente paciente = pacientes.findByTelefono(
+                        mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(telefono))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Paciente no encontrado con telefono " + telefono));
         return tramites.findByPacienteIdOrderByCreatedAtDesc(paciente.getId());

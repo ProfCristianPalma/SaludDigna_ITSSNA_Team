@@ -20,8 +20,11 @@ public class PacienteService {
         this.repository = repository;
     }
 
-    /** Registra un paciente nuevo. El telefono es unico: si ya existe, 409. */
+    /** Registra un paciente nuevo. El telefono es unico: si ya existe, 409. El telefono se guarda a 10 digitos (ver TelefonoUtil). */
     public Paciente registrar(Paciente paciente) {
+        if (paciente.getTelefono() != null) {
+            paciente.setTelefono(TelefonoUtil.normalizar(paciente.getTelefono()));
+        }
         if (paciente.getTelefono() != null && repository.existsByTelefono(paciente.getTelefono())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Ya existe un paciente con el telefono " + paciente.getTelefono());
@@ -39,12 +42,15 @@ public class PacienteService {
         if (telefono == null || fechaNacimiento == null) {
             return Optional.empty();
         }
-        return repository.findByTelefonoAndFechaNacimiento(telefono, fechaNacimiento);
+        return repository.findByTelefonoAndFechaNacimiento(TelefonoUtil.normalizar(telefono), fechaNacimiento);
     }
 
     @Transactional(readOnly = true)
     public Optional<Paciente> buscarPorTelefono(String telefono) {
-        return repository.findByTelefono(telefono);
+        if (telefono == null) {
+            return Optional.empty();
+        }
+        return repository.findByTelefono(TelefonoUtil.normalizar(telefono));
     }
 
     /** Pacientes cuyo nombre contiene el texto (sin importar mayusculas). */

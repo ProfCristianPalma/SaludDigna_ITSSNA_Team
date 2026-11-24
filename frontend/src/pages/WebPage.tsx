@@ -197,6 +197,7 @@ export default function WebPage() {
         <p className="muted">
           Un folio por estudio que hayas elegido, todos guardados en la base de datos
           con tu teléfono. Cada uno sigue su propio flujo: estudio, precio, clínica, cita y estado.
+          También los puedes ver todos juntos en tu <Link to="/historial">Historial de folios</Link>.
         </p>
         {misFolios.length === 0 ? (
           <p className="muted">Aún no tienes folios con este teléfono. Cotiza un estudio y aparecerá aquí.</p>

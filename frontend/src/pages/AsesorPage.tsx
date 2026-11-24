@@ -14,7 +14,7 @@ import EstadoBadge from '../components/EstadoBadge';
 import Timeline from '../components/Timeline';
 
 export default function AsesorPage() {
-  const [busqueda, setBusqueda] = useState('+52 222 000 0001');
+  const [busqueda, setBusqueda] = useState('2220000001');
   const [tramites, setTramites] = useState<Tramite[]>([]);
   const [tramite, setTramite] = useState<Tramite | null>(null);
   const [timeline, setTimeline] = useState<Evento[]>([]);

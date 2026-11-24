@@ -1,0 +1,142 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError } from '../api';
+import type { Paciente, Tramite } from '../types';
+import EstadoBadge from '../components/EstadoBadge';
+
+// Historial = TODOS los folios de UN solo paciente (el logueado).
+// No confundir con Clínica, que es la recepción con las citas
+// confirmadas de TODOS los pacientes.
+export default function HistorialPage() {
+  const [paciente, setPaciente] = useState<Paciente | null>(null);
+  const [tramites, setTramites] = useState<Tramite[]>([]);
+  const [mensaje, setMensaje] = useState('');
+  const [sinSesion, setSinSesion] = useState(false);
+  const [cargando, setCargando] = useState(true);
+
+  const cargar = useCallback(async () => {
+    if (!getToken()) {
+      setSinSesion(true);
+      setCargando(false);
+      return;
+    }
+    setCargando(true);
+    setMensaje('');
+    try {
+      const perfil = await getPerfilYo();
+      if (!perfil.paciente) {
+        setMensaje('Esta vista es para pacientes. Tu sesión es de staff: usa Asesor o Clínica.');
+        setCargando(false);
+        return;
+      }
+      setPaciente(perfil.paciente);
+      const lista = await getTramitesPorTelefono(perfil.paciente.telefono);
+      setTramites(lista);
+      if (lista.length === 0) setMensaje('Aún no tienes folios.');
+    } catch (err) {
+      if (isApiError(err) && err.status === 401) {
+        setSinSesion(true);
+      } else {
+        setMensaje('No se pudo cargar tu historial. Verifica que el backend esté arriba.');
+      }
+    } finally {
+      setCargando(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  // Recarga al volver a la página, para que los folios creados en Web
+  // o avanzados en WhatsApp aparezcan sin tener que recargar a mano.
+  useEffect(() => {
+    const alVolver = () => {
+      if (!document.hidden) void cargar();
+    };
+    window.addEventListener('focus', alVolver);
+    document.addEventListener('visibilitychange', alVolver);
+    return () => {
+      window.removeEventListener('focus', alVolver);
+      document.removeEventListener('visibilitychange', alVolver);
+    };
+  }, [cargar]);
+
+  function continuarEnWhatsapp(t: Tramite) {
+    window.localStorage.setItem('saluddigna-wa-telefono', t.paciente?.telefono ?? paciente?.telefono ?? '');
+    window.localStorage.setItem('saluddigna-wa-folio', t.folio);
+  }
+
+  if (sinSesion) {
+    return (
+      <div>
+        <h1>Mi historial de folios</h1>
+        <p className="muted">Para ver tus folios, primero inicia sesión con tu teléfono y tu contraseña.</p>
+        <div className="actions">
+          <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
+          <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h1>Mi historial de folios</h1>
+      <p className="muted">
+        {paciente ? `${paciente.nombre} · ${paciente.telefono}` : 'Tus folios, guardados en la base de datos.'}
+        {' '}Un folio por cada estudio que hayas elegido, del más reciente al más viejo.
+      </p>
+      <p className="muted">
+        Esto es tu historial personal. La <Link to="/clinica">Clínica</Link> es otra cosa: la recepción
+        con las citas confirmadas de todos los pacientes.
+      </p>
+
+      <div className="actions" style={{ marginBottom: 16 }}>
+        <button type="button" className="btn btn-secondary" onClick={() => void cargar()} disabled={cargando}>
+          {cargando ? 'Cargando…' : 'Actualizar'}
+        </button>
+        <Link className="btn btn-primary" to="/cotizar">Cotizar un estudio</Link>
+      </div>
+
+      {cargando && tramites.length === 0 && <p className="muted">Cargando tu historial…</p>}
+      {mensaje && <p className="notice" role="status">{mensaje}</p>}
+      {tramites.length === 0 && !cargando && !mensaje && (
+        <section className="card">
+          <p>Aún no tienes folios.</p>
+          <Link className="btn btn-primary" to="/cotizar">Cotizar tu primer estudio</Link>
+        </section>
+      )}
+
+      {tramites.map((t) => (
+        <section key={t.id} className="card" style={{ marginBottom: 12 }}>
+          <p>
+            Folio: <strong>{t.folio}</strong> <EstadoBadge estado={t.estado} />
+          </p>
+          <h2>{t.estudio.nombre}</h2>
+          <dl className="kv">
+            <dt>Precio</dt><dd><strong>${t.precioCotizado}</strong></dd>
+            <dt>Clínica</dt><dd>{t.clinica ? `${t.clinica.nombre} (${t.clinica.ciudad})` : 'Por elegir'}</dd>
+            <dt>Fecha de cita</dt><dd>{t.fechaCita ?? 'Por confirmar'}</dd>
+            <dt>Canal de origen</dt><dd>{t.canalOrigen}</dd>
+            {t.datosPendientes.length > 0 && (
+              <>
+                <dt>Datos pendientes</dt><dd>{t.datosPendientes.join(', ')}</dd>
+              </>
+            )}
+          </dl>
+          <div className="actions">
+            <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
+              Ver mi Journey
+            </Link>
+            {t.estado === 'COTIZADO' && (
+              <Link className="btn btn-primary" to="/whatsapp" onClick={() => continuarEnWhatsapp(t)}>
+                Continuar en WhatsApp
+              </Link>
+            )}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}

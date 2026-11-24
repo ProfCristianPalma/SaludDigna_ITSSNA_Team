@@ -82,7 +82,10 @@ public class CanalController {
 
     @PostMapping("/whatsapp/mensaje")
     public Map<String, Object> mensajeWhatsapp(@RequestBody MensajeWhatsappRequest req) {
-        Optional<Paciente> pacienteOpt = pacientes.buscarPorTelefono(req.telefono());
+        // El telefono se normaliza a 10 digitos (ver TelefonoUtil): un mismo
+        // paciente no debe duplicarse por escribir +52 en un canal y no en otro.
+        String telefono = mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(req.telefono());
+        Optional<Paciente> pacienteOpt = pacientes.buscarPorTelefono(telefono);
         if (pacienteOpt.isEmpty()) {
             Map<String, Object> respuesta = new LinkedHashMap<>();
             respuesta.put("tramite", null);

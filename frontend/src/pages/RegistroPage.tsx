@@ -49,7 +49,7 @@ export default function RegistroPage() {
           </label>
           <label>
             Teléfono (WhatsApp)
-            <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="+52 222 000 0001" autoComplete="tel" required />
+            <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="2220000001" autoComplete="tel" required />
           </label>
           <label>
             Correo electrónico
@@ -78,6 +78,9 @@ export default function RegistroPage() {
         </form>
         <p className="muted" style={{ marginTop: 12 }}>
           ¿Ya tienes cuenta? <Link to="/login">Inicia sesión aquí</Link>.
+        </p>
+        <p className="muted">
+          <Link to="/">← Volver a inicio</Link>
         </p>
       </section>
     </div>

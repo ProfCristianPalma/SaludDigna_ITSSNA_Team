@@ -8,10 +8,10 @@ INSERT INTO estudios (nombre, descripcion, precio, duracion_min) VALUES
 ON CONFLICT DO NOTHING;
 
 INSERT INTO clinicas (nombre, ciudad, direccion, telefono) VALUES
-    ('Clinica Puebla Centro', 'Puebla', 'Av. Juarez 123', '+52 222 000 0000'),
-    ('Clinica Salud Digna Tehuacan', 'Tehuacan', 'Calle 5 Sur 45', '+52 238 000 0000')
+    ('Clinica Puebla Centro', 'Puebla', 'Av. Juarez 123', '2220000000'),
+    ('Clinica Salud Digna Tehuacan', 'Tehuacan', 'Calle 5 Sur 45', '2380000000')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO pacientes (id, nombre, telefono, email, fecha_nacimiento, created_at) VALUES
-    (gen_random_uuid(), 'Ana Garcia Lopez', '+52 222 000 0001', 'ana.demo@saluddigna.test', '1990-05-14', NOW())
+    (gen_random_uuid(), 'Ana Garcia Lopez', '2220000001', 'ana.demo@saluddigna.test', '1990-05-14', NOW())
 ON CONFLICT (telefono) DO NOTHING;

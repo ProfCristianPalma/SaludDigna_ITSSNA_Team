@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { enviarWhatsapp } from '../api';
+import { getPerfilYo, getToken, getTramitesPorTelefono, enviarWhatsapp, normalizarTelefono } from '../api';
 import { MOCK_PACIENTE_ANA } from '../mock';
-import type { Tramite } from '../types';
+import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 interface MensajeChat {
@@ -10,8 +10,12 @@ interface MensajeChat {
   texto: string;
 }
 
+const WA_TELEFONO_KEY = 'saluddigna-wa-telefono';
+const WA_FOLIO_KEY = 'saluddigna-wa-folio';
+
 export default function WhatsappPage() {
   const [telefono, setTelefono] = useState(MOCK_PACIENTE_ANA.telefono);
+  const [paciente, setPaciente] = useState<Paciente | null>(null);
   const [texto, setTexto] = useState('');
   const [mensajes, setMensajes] = useState<MensajeChat[]>([
     { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. ¿En qué te ayudo hoy? Si ya empezaste un trámite en la web, dime tu teléfono o tu folio y lo retomamos donde lo dejaste.' },
@@ -19,7 +23,45 @@ export default function WhatsappPage() {
   const [tramite, setTramite] = useState<Tramite | null>(null);
   const [tramites, setTramites] = useState<Tramite[]>([]);
   const [enviando, setEnviando] = useState(false);
+  const [sesionLista, setSesionLista] = useState(false);
   const finRef = useRef<HTMLDivElement>(null);
+  const folioAutoEnviado = useRef(false);
+
+  // Con sesión, WhatsApp arranca con EL paciente logueado: su nombre,
+  // su teléfono y sus folios. Sin sesión, Ana de ejemplo como antes.
+  // "Abrir WhatsApp" desde App o "Continuar en WhatsApp" desde Historial
+  // dejan el teléfono y el folio en localStorage como respaldo.
+  useEffect(() => {
+    async function cargarSesion() {
+      const guardadoTel = window.localStorage.getItem(WA_TELEFONO_KEY);
+      if (guardadoTel) setTelefono(normalizarTelefono(guardadoTel));
+      if (!getToken()) return;
+      try {
+        const perfil = await getPerfilYo();
+        if (!perfil.paciente) return;
+        setPaciente(perfil.paciente);
+        setTelefono(perfil.paciente.telefono);
+        const lista = await getTramitesPorTelefono(perfil.paciente.telefono);
+        setTramites(lista);
+        const activos = lista.filter((t) => t.estado !== 'ATENDIDO');
+        if (activos.length > 0) {
+          setMensajes((prev) => [
+            ...prev,
+            {
+              id: 2,
+              de: 'bot',
+              texto: `Hola ${perfil.paciente?.nombre.split(' ')[0]}, tienes ${activos.length} folio${activos.length > 1 ? 's' : ''} activo${activos.length > 1 ? 's' : ''}. Escribe el folio con el que quieres seguir o pulsa uno de abajo.`,
+            },
+          ]);
+        }
+      } catch {
+        // Sin sesión válida: se queda el ejemplo de Ana.
+      } finally {
+        setSesionLista(true);
+      }
+    }
+    void cargarSesion();
+  }, []);
 
   useEffect(() => {
     finRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -48,10 +90,29 @@ export default function WhatsappPage() {
     }
   }
 
+  // Si se llegó desde Historial con un folio, se manda solo una vez,
+  // y solo cuando ya se cargó la sesión (si no, se mandaría con el
+  // teléfono de ejemplo de Ana y el folio no pertenecería a ese teléfono).
+  useEffect(() => {
+    if (!sesionLista || folioAutoEnviado.current) return;
+    const folio = window.localStorage.getItem(WA_FOLIO_KEY);
+    if (!folio || !telefono) return;
+    folioAutoEnviado.current = true;
+    window.localStorage.removeItem(WA_FOLIO_KEY);
+    void handleEnviar(new Event('submit') as unknown as React.FormEvent, folio);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [telefono, sesionLista]);
+
+  const primerNombre = paciente?.nombre.split(' ')[0];
+
   return (
     <div>
       <h1>WhatsApp — continúa tu trámite</h1>
-      <p className="muted">El bot reconoce tus trámites por teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir.</p>
+      <p className="muted">
+        {paciente
+          ? `Hola, ${primerNombre}: el bot te reconoce por tu teléfono ${paciente.telefono} y tus folios.`
+          : 'El bot reconoce tus trámites por teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir.'}
+      </p>
 
       <div className="wa-shell">
         <div className="wa-header">
@@ -76,7 +137,7 @@ export default function WhatsappPage() {
           <input
             value={telefono}
             onChange={(e) => setTelefono(e.target.value)}
-            placeholder="Tu teléfono"
+            placeholder="Tu teléfono (10 dígitos)"
             aria-label="Teléfono"
           />
           <input
@@ -126,7 +187,7 @@ export default function WhatsappPage() {
           <p>
             {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
           </p>
-          <p className="muted">Paciente: {tramite.paciente?.nombre ?? MOCK_PACIENTE_ANA.nombre}</p>
+          <p className="muted">Paciente: {tramite.paciente?.nombre ?? paciente?.nombre ?? MOCK_PACIENTE_ANA.nombre}</p>
         </section>
       )}
 
@@ -135,12 +196,17 @@ export default function WhatsappPage() {
           <h2>Tus folios activos</h2>
           <ul>
             {tramites.map((t) => (
-              <li key={t.id}>
-                <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
+              <li key={t.id} className="dato-row">
+                <span>
+                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
+                </span>
+                <button type="button" className="btn btn-small" onClick={(e) => handleEnviar(e, t.folio)}>
+                  Seguir con este folio
+                </button>
               </li>
             ))}
           </ul>
-          <p className="muted">Escribe el folio con el que quieres seguir.</p>
+          <p className="muted">Pulsa un folio para continuar con ese trámite.</p>
         </section>
       )}
     </div>

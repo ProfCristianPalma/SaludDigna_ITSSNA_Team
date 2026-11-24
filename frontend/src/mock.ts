@@ -3,17 +3,17 @@ import type { Clinica, Estudio, Evento, Paciente, Tramite } from './types';
 export const MOCK_PACIENTE_ANA: Paciente = {
   id: 'pac-ana-001',
   nombre: 'Ana García López',
-  telefono: '+52 222 000 0001',
+  telefono: '2220000001',
   fechaNacimiento: '1990-05-14',
 };
 
 /** 5 usuarios ejemplo, igual que en la BD (V2/V3 + DataSeeder). */
 export const MOCK_PACIENTES: Paciente[] = [
   MOCK_PACIENTE_ANA,
-  { id: 'pac-luis-002', nombre: 'Luis Hernández Torres', telefono: '+52 222 111 2233', fechaNacimiento: '1985-03-22' },
-  { id: 'pac-maria-003', nombre: 'María Fernanda Ruiz', telefono: '+52 222 444 5566', fechaNacimiento: '1992-08-09' },
-  { id: 'pac-carlos-004', nombre: 'Carlos Mendoza Vega', telefono: '+52 238 777 8899', fechaNacimiento: '1978-11-30' },
-  { id: 'pac-fernanda-005', nombre: 'Fernanda López Díaz', telefono: '+52 222 999 0011', fechaNacimiento: '2001-06-17' },
+  { id: 'pac-luis-002', nombre: 'Luis Hernández Torres', telefono: '2221112233', fechaNacimiento: '1985-03-22' },
+  { id: 'pac-maria-003', nombre: 'María Fernanda Ruiz', telefono: '2224445566', fechaNacimiento: '1992-08-09' },
+  { id: 'pac-carlos-004', nombre: 'Carlos Mendoza Vega', telefono: '2387778899', fechaNacimiento: '1978-11-30' },
+  { id: 'pac-fernanda-005', nombre: 'Fernanda López Díaz', telefono: '2229990011', fechaNacimiento: '2001-06-17' },
 ];
 
 /** Trámite ejemplo por usuario, cada uno en un estado distinto. */
@@ -77,8 +77,8 @@ export function mockTimeline(): Evento[] {
       canal: 'WEB',
       actor: 'Ana García López',
       timestamp: `${base}`,
-      mensaje: 'Ana se registró en la web con su teléfono +52 222 000 0001.',
-      payload: { paciente: 'Ana García López', telefono: '+52 222 000 0001' },
+      mensaje: 'Ana se registró en la web con su teléfono 2220000001.',
+      payload: { paciente: 'Ana García López', telefono: '2220000001' },
     },
     {
       id: 'ev-002',

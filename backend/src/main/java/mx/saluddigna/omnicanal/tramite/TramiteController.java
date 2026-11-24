@@ -137,4 +137,20 @@ public class TramiteController {
     public Map<String, Object> journeyPorFolio(@PathVariable String folio) {
         return service.obtenerJourney(service.buscarPorFolio(folio).getId());
     }
+
+    /**
+     * Tablero de Clínica: citas como DTOs planos (no entidades JPA).
+     * GET /api/clinica/citas?estado=CONFIRMADO (por defecto, si se
+     * pasa estado); sin estado trae todos. El endpoint viejo
+     * GET /api/tramites?estado= sigue intacto.
+     */
+    @GetMapping("/clinica/citas")
+    public List<CitaClinicaDTO> citasClinica(
+            @RequestParam(required = false) String estado) {
+        if (estado == null || estado.isBlank()) {
+            return service.listarCitasClinica(null);
+        }
+        return service.listarCitasClinica(
+                mx.saluddigna.omnicanal.tramite.domain.EstadoTramite.valueOf(estado.trim().toUpperCase()));
+    }
 }

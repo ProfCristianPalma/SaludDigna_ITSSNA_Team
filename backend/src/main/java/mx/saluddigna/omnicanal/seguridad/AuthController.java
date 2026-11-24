@@ -31,7 +31,7 @@ import org.springframework.web.server.ResponseStatusException;
  * porque no hay tabla de usuarios staff en esta entrega.
  *
  * Usuarios demo:
- * - Pacientes en BD: teléfono + contraseña (ej. +52 222 000 0001 / ana123)
+ * - Pacientes en BD: teléfono a 10 dígitos + contraseña (ej. 2220000001 / ana123)
  * - asesor / asesor123 -&gt; ASESOR
  * - admin / admin123 -&gt; ADMINISTRADOR
  */
@@ -116,7 +116,7 @@ public class AuthController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "La contraseña debe tener al menos 6 caracteres");
         }
-        String telefono = req.telefono().trim();
+        String telefono = mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(req.telefono());
         Optional<Paciente> existente = pacientes.findByTelefono(telefono);
         Paciente paciente;
         if (existente.isPresent()) {
@@ -181,7 +181,9 @@ public class AuthController {
     private Optional<Paciente> resolverPaciente(String usuario) {
         String digitos = usuario.replaceAll("\\D", "");
         if (digitos.length() >= 7) {
-            Optional<Paciente> porTelefono = pacientes.findByTelefono(usuario);
+            // Telefono normalizado a 10 digitos: "+52 222..." y "222..." son el mismo paciente.
+            Optional<Paciente> porTelefono = pacientes.findByTelefono(
+                    mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(usuario));
             if (porTelefono.isPresent()) {
                 return porTelefono;
             }
