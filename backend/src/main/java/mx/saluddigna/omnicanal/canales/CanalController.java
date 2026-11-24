@@ -47,6 +47,10 @@ import org.springframework.web.server.ResponseStatusException;
  * - Cuando no entiende, lo dice claro ("No entendí ..."), muestra
  *   el estado del folio y las opciones válidas ahora, con ejemplos.
  *   Nunca inventa un avance ni confirma algo que no pasó.
+ * - Elegir folio ES una intención entendida ("folio 1", "primer
+ *   folio", "SD-2026-0012"): el bot lo confirma con entendido=true;
+ *   nunca responde "No entendí" a un mensaje que ya seleccionó
+ *   el folio (la selección se resuelve antes de la intención).
  * - Un "hola" o "ayuda" NO crea trámites: solo se crea uno cuando el
  *   usuario pide un estudio concreto. Un teléfono no registrado se
  *   registra con nombre + fecha de nacimiento en el mismo chat.
@@ -178,6 +182,20 @@ public class CanalController {
     private static final Pattern SELECCION_PATTERN =
             Pattern.compile("(?:folio|opci[oó]n|n[uú]mero)\\s*(\\d{1,2})", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Ordinales en palabras para elegir de la lista ("primer folio",
+     * "el segundo", "la primera", "último"). Las clínicas son
+     * femeninas ("la primera clínica"), así que un ordinal femenino
+     * solo elige folio cuando NO hay un folio en contexto; con
+     * contexto, "la primera" es la clínica 1. Los masculinos
+     * ("primero", "segundo", "último") siempre eligen folio.
+     * Se aplican sobre el texto normalizado (sin acentos, minúsculas).
+     */
+    private static final Pattern ORDINAL_MASC =
+            Pattern.compile("\\b(primer|primero|segundo|tercero|cuarto|quinto|ultimo)\\b");
+    private static final Pattern ORDINAL_FEM =
+            Pattern.compile("\\b(primera|segunda|tercera|cuarta|quinta|ultima)\\b");
+
     @PostMapping("/whatsapp/mensaje")
     public Map<String, Object> mensajeWhatsapp(@RequestBody MensajeWhatsappRequest req) {
         // El telefono se normaliza a 10 digitos (ver TelefonoUtil): un mismo
@@ -193,51 +211,76 @@ public class CanalController {
         // Un paciente puede tener varios folios activos, uno por estudio.
         List<Tramite> activos = tramites.listarActivosDe(paciente.getId());
 
-        // 1) Folio explícito en el texto, o en contexto (campo `folio`
-        // del front). El del texto manda si trae uno distinto al contexto.
-        String folioPedido = null;
+        // Si el mensaje selecciona un folio, ESA es su intención y se
+        // marca como entendida: nunca debe terminar en "No entendí" un
+        // mensaje que ya eligió el folio (captura 2026-11-24: "folio 1"
+        // seleccionaba SD-2026-0012 y a la vez decía "No entendí").
+        Tramite tramite = null;
+        boolean folioSeleccionado = false;
+        boolean conContexto = req.folio() != null && !req.folio().isBlank();
+
+        // 1) Folio explícito en el texto (SD-2026-XXXX): manda sobre el contexto.
         Matcher folioEnTexto = FOLIO_PATTERN.matcher(texto);
         if (folioEnTexto.find()) {
-            folioPedido = folioEnTexto.group().toUpperCase();
-        } else if (req.folio() != null && !req.folio().isBlank()) {
-            folioPedido = req.folio().trim().toUpperCase();
-        }
-
-        Tramite tramite = null;
-        if (folioPedido != null) {
+            String folioPedido = folioEnTexto.group().toUpperCase();
             Tramite porFolio;
             try {
                 porFolio = tramites.buscarPorFolio(folioPedido);
             } catch (ResponseStatusException e) {
                 return respuestaSinTramite("No encontré ningún trámite con el folio " + folioPedido
-                        + ". Revisa el folio o dime tu estudio para empezar uno nuevo.", "ELEGIR_FOLIO", false, List.of());
+                        + ". Revisa el folio o dime tu estudio para empezar uno nuevo.", "ELEGIR_FOLIO", true, List.of());
             }
             if (!porFolio.getPaciente().getId().equals(paciente.getId())) {
                 return respuestaSinTramite("El folio " + folioPedido + " no pertenece a este número de teléfono.",
-                        "ELEGIR_FOLIO", false, List.of());
+                        "ELEGIR_FOLIO", true, List.of());
             }
             tramite = porFolio;
+            folioSeleccionado = true;
         } else {
-            // 2) "folio 1", "opción 2", "número 3".
-            Optional<Tramite> seleccion = elegirDeLista(texto, activos);
-            if (seleccion.isPresent()) {
-                tramite = seleccion.get();
+            // 2) Selección de la lista en el texto ("folio 1", "opción 2",
+            // "primer folio", "el segundo"): también manda sobre el contexto.
+            int pedido = indicePedido(texto, norm, conContexto, activos.size());
+            if (pedido != -1) {
+                if (activos.isEmpty()) {
+                    return respuestaSinTramite("No tienes trámites activos, " + paciente.getNombre().split(" ")[0]
+                            + ". Puedo cotizarte un estudio:\n" + textoEstudios(), "ELEGIR_ESTUDIO", true, opcionesEstudios());
+                }
+                if (pedido < 1 || pedido > activos.size()) {
+                    return respuestaFueraDeRango(paciente, activos, pedido);
+                }
+                tramite = activos.get(pedido - 1);
+                folioSeleccionado = true;
+            } else if (conContexto) {
+                // 3) Folio en contexto (campo `folio` del front).
+                String folioContexto = req.folio().trim().toUpperCase();
+                Tramite porContexto;
+                try {
+                    porContexto = tramites.buscarPorFolio(folioContexto);
+                } catch (ResponseStatusException e) {
+                    return respuestaSinTramite("No encontré ningún trámite con el folio " + folioContexto
+                            + ". Revisa el folio o dime tu estudio para empezar uno nuevo.", "ELEGIR_FOLIO", true, List.of());
+                }
+                if (!porContexto.getPaciente().getId().equals(paciente.getId())) {
+                    return respuestaSinTramite("El folio " + folioContexto + " no pertenece a este número de teléfono.",
+                            "ELEGIR_FOLIO", true, List.of());
+                }
+                tramite = porContexto;
             } else {
-                // 3) La intención identifica el folio por su estado
+                // 4) La intención identifica el folio por su estado
                 // (p. ej. "1" -> el folio COTIZADO; una fecha -> el
                 // folio CLINICA_SELECCIONADA; un estudio -> el INICIADO).
                 Optional<Tramite> porIntencion = porIntencion(norm, texto, activos);
                 if (porIntencion.isPresent()) {
                     tramite = porIntencion.get();
                 } else if (activos.size() == 1) {
-                    // 4) Un solo folio activo: es ese.
+                    // 5) Un solo folio activo: es ese.
                     tramite = activos.get(0);
                 } else if (activos.isEmpty()) {
-                    // 5) Sin folios: solo se crea un trámite si el usuario
+                    // 6) Sin folios: solo se crea un trámite si el usuario
                     // pide un estudio concreto; un saludo no crea nada.
                     return responderSinFolios(paciente, texto, norm);
                 } else {
-                    // 6) Varios folios y no se puede saber con cuál seguir:
+                    // 7) Varios folios y no se puede saber con cuál seguir:
                     // no se elige uno al azar, se listan y se pregunta.
                     return respuestaListaFolios(paciente, activos, texto, norm);
                 }
@@ -248,7 +291,7 @@ public class CanalController {
                 "{\"mensaje\":\"" + escapar(texto) + "\",\"canalAnterior\":\"" + tramite.getCanalOrigen() + "\"}");
 
         // Interpreta la intencion segun el estado actual. Puede avanzar el tramite o crear uno nuevo.
-        ResultadoBot resultado = procesarIntencion(paciente, tramite, texto);
+        ResultadoBot resultado = procesarIntencion(paciente, tramite, texto, folioSeleccionado);
         Tramite actualizado = resultado.tramite() != null ? resultado.tramite() : tramites.buscar(tramite.getId());
         // La lista de folios se relee: el estado del folio pudo cambiar con este mensaje.
         List<Tramite> activosActuales = tramites.listarActivosDe(paciente.getId());
@@ -364,13 +407,16 @@ public class CanalController {
         String prefacio;
         boolean entendido;
         Optional<String> ambiguo = motivoAmbiguo(norm, texto, activos);
-        if (esSaludoOAyuda(norm)) {
+        if (esSaludoOAyuda(norm) || esPedirLista(norm)) {
             prefacio = "Hola " + paciente.getNombre().split(" ")[0] + ", tienes " + activos.size() + " trámites activos. ¿Con cuál seguimos?";
             entendido = true;
         } else if (ambiguo.isPresent()) {
+            // La intención sí se reconoció (elegir clínica, una fecha...),
+            // lo que falta es saber a qué folio aplica: es una aclaración,
+            // no un "no entendí".
             prefacio = "No sé a cuál de tus folios te refieres con ese mensaje: " + ambiguo.get()
                     + ". Dime el folio con el que seguimos.";
-            entendido = false;
+            entendido = true;
         } else {
             prefacio = "No entendí \"" + texto + "\". Tienes " + activos.size() + " trámites activos: dime con cuál seguimos.";
             entendido = false;
@@ -457,18 +503,78 @@ public class CanalController {
         return respuesta;
     }
 
-    private Optional<Tramite> elegirDeLista(String mensaje, List<Tramite> activos) {
-        if (mensaje == null || activos.isEmpty()) return Optional.empty();
-        Matcher m = SELECCION_PATTERN.matcher(mensaje);
-        if (!m.find()) return Optional.empty();
-        int n;
-        try {
-            n = Integer.parseInt(m.group(1));
-        } catch (NumberFormatException e) {
-            return Optional.empty();
+    /**
+     * Índice (1-based) de la lista que pide el mensaje, o -1 si no pide
+     * ninguno: "folio 2", "opción 1", "número 3", "primer folio",
+     * "el segundo", "último". Un número suelto ("1", "2") NO se usa:
+     * en un trámite COTIZADO "1" significa "clínica 1".
+     */
+    private int indicePedido(String texto, String norm, boolean conContexto, int total) {
+        Matcher m = SELECCION_PATTERN.matcher(texto);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException e) {
+                // sigue a los ordinales
+            }
         }
-        if (n < 1 || n > activos.size()) return Optional.empty();
-        return Optional.of(activos.get(n - 1));
+        // Ordinal junto a la palabra "folio" ("primer folio",
+        // "el segundo folio"): explícito, manda siempre.
+        // Sin "folio": un ordinal femenino ("la primera") solo elige
+        // folio si NO hay contexto (con contexto es la clínica 1);
+        // los masculinos ("primero", "segundo", "último") eligen
+        // folio siempre.
+        Integer ord = norm.contains("folio") ? indiceOrdinal(norm, true) : indiceOrdinal(norm, !conContexto);
+        if (ord == null) return -1;
+        if (ord == Integer.MAX_VALUE) return total; // último
+        return ord;
+    }
+
+    /** Ordinal en palabras -> número (1..5); "último/a" -> MAX_VALUE (el último de la lista). */
+    private Integer indiceOrdinal(String norm, boolean incluirFemenino) {
+        Matcher m = ORDINAL_MASC.matcher(norm);
+        if (m.find()) return indiceDeOrdinal(m.group(1));
+        if (incluirFemenino) {
+            Matcher f = ORDINAL_FEM.matcher(norm);
+            if (f.find()) return indiceDeOrdinal(f.group(1));
+        }
+        return null;
+    }
+
+    private int indiceDeOrdinal(String palabra) {
+        return switch (palabra) {
+            case "primer", "primero", "primera" -> 1;
+            case "segundo", "segunda" -> 2;
+            case "tercero", "tercera" -> 3;
+            case "cuarto", "cuarta" -> 4;
+            case "quinto", "quinta" -> 5;
+            default -> Integer.MAX_VALUE; // ultimo / ultima
+        };
+    }
+
+    /** Quita del mensaje los trozos que seleccionan un folio, para
+     * procesar solo lo que queda ("folio 1, la de Puebla" -> "la de Puebla"). */
+    private String quitarSeleccion(String texto) {
+        String s = normalizar(texto);
+        s = FOLIO_PATTERN.matcher(s).replaceAll(" ");
+        s = SELECCION_PATTERN.matcher(s).replaceAll(" ");
+        s = ORDINAL_MASC.matcher(s).replaceAll(" ");
+        s = ORDINAL_FEM.matcher(s).replaceAll(" ");
+        s = s.replaceAll("\\b(el|la|los|las|folio|opcion|numero)\\b", " ");
+        s = s.replaceAll("[,;:.]+", " ").replaceAll("\\s+", " ").trim();
+        return s;
+    }
+
+    /** El usuario pidió un folio que no tiene ("folio 9", "quinto" con
+     * 4 folios): la intención se entendió, lo que no existe es ese
+     * número. Se listan los que sí tiene. */
+    private Map<String, Object> respuestaFueraDeRango(Paciente paciente, List<Tramite> activos, int pedido) {
+        String msg = "No tienes un folio " + pedido + ": solo tienes " + activos.size()
+                + " trámite" + (activos.size() == 1 ? "" : "s") + " activo" + (activos.size() == 1 ? "" : "s")
+                + ". ¿Con cuál seguimos?\n" + listarFoliosTexto(activos);
+        Map<String, Object> respuesta = respuestaSinTramite(msg, "ELEGIR_FOLIO", true, foliosComoOpciones(activos));
+        respuesta.put("tramites", activos);
+        return respuesta;
     }
 
     private String listarFoliosTexto(List<Tramite> activos) {
@@ -481,7 +587,7 @@ public class CanalController {
                     .append(" (").append(t.getEstado().name()).append(")\n");
         }
         sb.append("Responde con el folio (por ejemplo ").append(activos.get(0).getFolio())
-                .append(") o con 'folio 1', 'folio 2', etc.");
+                .append("), con 'folio 1', 'folio 2', etc., o con 'primer folio', 'segundo', etc.");
         return sb.toString();
     }
 
@@ -495,9 +601,23 @@ public class CanalController {
      * mensaje, luego la acción propia del estado, luego saludo/ayuda
      * y gracias, y al final "no entendí" con las opciones del estado.
      */
-    private ResultadoBot procesarIntencion(Paciente paciente, Tramite tramite, String mensajeCrudo) {
+    private ResultadoBot procesarIntencion(Paciente paciente, Tramite tramite, String mensajeCrudo, boolean folioSeleccionado) {
         String norm = normalizar(mensajeCrudo);
         String texto = mensajeCrudo == null ? "" : mensajeCrudo.trim();
+
+        // El mensaje seleccionó un folio ("folio 1", "primer folio",
+        // "SD-2026-0012"): eso YA es la intención cumplida. Si no trae
+        // nada más, se confirma el folio (entendido=true, nunca
+        // "No entendí"); si trae algo más ("folio 1, la de Puebla"),
+        // se procesa solo ese resto.
+        if (folioSeleccionado) {
+            String resto = quitarSeleccion(texto);
+            if (resto.isBlank()) {
+                return confirmacionSeleccion(paciente, tramite);
+            }
+            texto = resto;
+            norm = normalizar(resto);
+        }
 
         // Cancelar no está disponible por WhatsApp en ningún estado.
         if (norm.contains("cancelar")) {
@@ -505,15 +625,10 @@ public class CanalController {
                     + ". Para cancelar, llama al Call Center y un asesor lo hace por ti con tu folio " + tramite.getFolio() + ".",
                     true, opcionesPara(tramite), tramite);
         }
-        // El mensaje es solo el folio: retomar ese trámite.
-        if (FOLIO_PATTERN.matcher(texto).matches()) {
-            return new ResultadoBot(resumenEstado(paciente, tramite) + " ¿Seguimos con este?",
-                    true, opcionesPara(tramite), tramite);
-        }
 
         Optional<ResultadoBot> accion = switch (tramite.getEstado()) {
             case COTIZADO -> procesarCotizado(paciente, tramite, norm);
-            case CLINICA_SELECCIONADA -> procesarClinicaSeleccionada(paciente, tramite, mensajeCrudo, norm);
+            case CLINICA_SELECCIONADA -> procesarClinicaSeleccionada(paciente, tramite, texto, norm);
             case INICIADO, DATOS_PENDIENTES -> procesarInicio(paciente, tramite, norm);
             case CONFIRMADO -> procesarConfirmado(paciente, tramite, norm);
             case ATENDIDO -> procesarAtendido(paciente, tramite, norm);
@@ -524,7 +639,15 @@ public class CanalController {
             return new ResultadoBot("¡De nada, " + paciente.getNombre().split(" ")[0] + "! " + resumenEstado(paciente, tramite),
                     true, opcionesPara(tramite), tramite);
         }
-        return noEntendi(paciente, tramite, mensajeCrudo);
+        // Pregunta por su propio trámite ("¿cuándo es mi cita?", "¿cuál
+        // es mi clínica?", "¿qué estudio tengo?"): se responde con el
+        // estado real, no es un "no entendí".
+        if (esPreguntaEstado(norm)) {
+            return new ResultadoBot(resumenEstado(paciente, tramite)
+                    + "\nAhora puedes:\n" + listarOpcionesNumeradas(opcionesPara(tramite)),
+                    true, opcionesPara(tramite), tramite);
+        }
+        return noEntendi(paciente, tramite, texto);
     }
 
     private Optional<ResultadoBot> procesarCotizado(Paciente paciente, Tramite tramite, String norm) {
@@ -537,7 +660,12 @@ public class CanalController {
                     + ". Ahora dime qué día prefieres para tu cita, en formato DD/MM/AAAA (por ejemplo " + manana() + ").";
             return Optional.of(new ResultadoBot(resp, true, opcionesFechas(), actualizado));
         }
-        if (norm.equals("si") || norm.contains("clinica") || norm.contains("elegir") || norm.contains("quiero")
+        // "quiero" solo vale si es querer seguir con la clínica: un
+        // "quiero una pizza" no es querer elegir clínica y debe caer
+        // en "no entendí", no listar clínicas como si se hubiera entendido.
+        if (norm.equals("si") || norm.contains("clinica") || norm.contains("elegir") || norm.equals("quiero")
+                || norm.contains("quiero elegir") || norm.contains("quiero la") || norm.contains("quiero clinica")
+                || norm.contains("quiero continuar") || norm.contains("quiero seguir")
                 || norm.contains("continuar") || norm.contains("adelante")) {
             return Optional.of(new ResultadoBot(listarClinicasTexto(nombre, tramite), true, opcionesClinicas(), tramite));
         }
@@ -654,18 +782,34 @@ public class CanalController {
         sb.append("Tu trámite ").append(tramite.getFolio()).append(" (").append(nombreEstudio(tramite));
         if (tramite.getPrecioCotizado() != null) sb.append(" $").append(tramite.getPrecioCotizado());
         sb.append(") está en estado ").append(tramite.getEstado().name()).append(": ");
-        switch (tramite.getEstado()) {
-            case INICIADO -> sb.append("aún no tiene estudio elegido");
-            case DATOS_PENDIENTES -> sb.append("le faltan datos por completar");
-            case COTIZADO -> sb.append("ya está cotizado, falta elegir clínica");
-            case CLINICA_SELECCIONADA -> sb.append("clínica ").append(nombreClinica(tramite)).append(", falta confirmar la fecha");
-            case CONFIRMADO -> sb.append("cita el ")
-                    .append(tramite.getFechaCita() == null ? "sin fecha" : tramite.getFechaCita().format(FORMATO_LATINO_HORA))
-                    .append(" en ").append(nombreClinica(tramite));
-            case ATENDIDO -> sb.append("ya fue atendido");
-        }
+        sb.append(descripcionEstado(tramite));
         sb.append(".");
         return sb.toString();
+    }
+
+    /** Qué significa el estado actual y qué falta (sin el folio ni el estudio). */
+    private String descripcionEstado(Tramite tramite) {
+        return switch (tramite.getEstado()) {
+            case INICIADO -> "aún no tiene estudio elegido";
+            case DATOS_PENDIENTES -> "le faltan datos por completar";
+            case COTIZADO -> "ya está cotizado, falta elegir clínica";
+            case CLINICA_SELECCIONADA -> "clínica " + nombreClinica(tramite) + ", falta confirmar la fecha";
+            case CONFIRMADO -> "cita el "
+                    + (tramite.getFechaCita() == null ? "sin fecha" : tramite.getFechaCita().format(FORMATO_LATINO_HORA))
+                    + " en " + nombreClinica(tramite);
+            case ATENDIDO -> "ya fue atendido";
+        };
+    }
+
+    /** Confirmación de que se seleccionó un folio: nunca un "No entendí". */
+    private ResultadoBot confirmacionSeleccion(Paciente paciente, Tramite tramite) {
+        List<String> opciones = opcionesPara(tramite);
+        String resp = "Perfecto, seguimos con tu trámite " + tramite.getFolio()
+                + " (" + nombreEstudio(tramite)
+                + (tramite.getPrecioCotizado() != null ? " $" + tramite.getPrecioCotizado() : "") + "). "
+                + "Está en estado " + tramite.getEstado().name() + ": " + descripcionEstado(tramite)
+                + "\nAhora puedes:\n" + listarOpcionesNumeradas(opciones);
+        return new ResultadoBot(resp, true, opciones, tramite);
     }
 
     private String nombreEstudio(Tramite tramite) {
@@ -731,12 +875,38 @@ public class CanalController {
         return sb.toString();
     }
 
+    /** Opciones numeradas para el texto. Las que ya traen su número
+     * ("1 · Clínica Puebla Centro") se dejan tal cual: antes salía
+     * "1) 1 · Clínica Puebla Centro", con el número duplicado. */
     private String listarOpcionesNumeradas(List<String> opciones) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < opciones.size(); i++) {
-            sb.append(i + 1).append(") ").append(opciones.get(i)).append("\n");
+            String op = opciones.get(i);
+            if (op.matches("^\\d+\\s*[·•.)\\-].*")) {
+                sb.append(op).append("\n");
+            } else {
+                sb.append(i + 1).append(") ").append(op).append("\n");
+            }
         }
         return sb.toString().trim();
+    }
+
+    /** Pide ver la lista de folios ("folio", "mis folios", "mis trámites"): no es un error, se listan. */
+    private boolean esPedirLista(String norm) {
+        return norm.equals("folio") || norm.contains("mis folios") || norm.contains("mis tramites")
+                || norm.contains("ver mis folios") || norm.contains("ver mis tramites");
+    }
+
+    /** Pregunta por su propio trámite ("¿cuándo es mi cita?", "¿cuál
+     * es mi clínica?", "¿qué estudio tengo?", "¿cuánto cuesta?"): se
+     * responde con el estado real, no es un "no entendí". */
+    private boolean esPreguntaEstado(String norm) {
+        return norm.contains("mi cita") || norm.contains("cuando") || norm.contains("donde")
+                || norm.contains("que estudio") || norm.contains("cual es mi") || norm.contains("mi folio")
+                || norm.contains("folio") || norm.contains("estado") || norm.contains("que tengo")
+                || norm.contains("mi tramite") || norm.contains("que clinica") || norm.contains("cual clinica")
+                || norm.contains("mi clinica") || norm.contains("cuanto") || norm.contains("precio")
+                || norm.contains("costo");
     }
 
     private boolean esSaludoOAyuda(String norm) {
