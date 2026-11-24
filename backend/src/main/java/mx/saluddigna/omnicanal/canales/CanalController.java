@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import java.text.Normalizer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,10 +38,15 @@ import org.springframework.web.server.ResponseStatusException;
  * El bot de WhatsApp es una maquina de estados guiada por texto:
  * cada mensaje se interpreta segun el estado actual del tramite
  * (COTIZADO -> elegir clinica con 1/2, CLINICA_SELECCIONADA ->
- * confirmar con una fecha AAAA-MM-DD). Antes de este arreglo el
+ * confirmar con una fecha DD/MM/AAAA). Antes de este arreglo el
  * endpoint solo devolvia un mensaje segun el estado, sin leer la
  * intencion del usuario, asi que un "si" repetia el mismo texto
  * una y otra vez.
+ *
+ * Fechas: el usuario escribe en formato latinoamericano DD/MM/AAAA
+ * (se acepta tambien AAAA-MM-DD por compatibilidad) y las citas se
+ * le muestran en DD/MM/AAAA. Por dentro se sigue guardando LocalDate
+ * en ISO; la conversion solo existe aqui, en la presentacion.
  */
 @RestController
 @RequestMapping("/api/canales")
@@ -70,6 +76,42 @@ public class CanalController {
 
     private static final Pattern FECHA_ISO = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
 
+    /** Fecha latinoamericana DD/MM/AAAA (dia/mes/ano, no mes/dia). */
+    private static final Pattern FECHA_LATINA = Pattern.compile("(\\d{1,2})/(\\d{1,2})/(\\d{4})");
+
+    /** Formato en el que se le muestran las fechas al usuario: DD/MM/AAAA. */
+    private static final DateTimeFormatter FORMATO_LATINO = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    private static final DateTimeFormatter FORMATO_LATINO_HORA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+
+    /**
+     * Extrae una fecha del mensaje del usuario. Acepta DD/MM/AAAA
+     * (formato latinoamericano) y AAAA-MM-DD (compatibilidad). Devuelve
+     * vacío si no hay fecha o si no es una fecha real (31/02/2026).
+     */
+    static Optional<LocalDate> extraerFecha(String mensaje) {
+        if (mensaje == null) return Optional.empty();
+        Matcher latina = FECHA_LATINA.matcher(mensaje);
+        if (latina.find()) {
+            try {
+                return Optional.of(LocalDate.of(Integer.parseInt(latina.group(3)),
+                        Integer.parseInt(latina.group(2)), Integer.parseInt(latina.group(1))));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher iso = FECHA_ISO.matcher(mensaje);
+        if (iso.find()) {
+            try {
+                return Optional.of(LocalDate.of(Integer.parseInt(iso.group(1)),
+                        Integer.parseInt(iso.group(2)), Integer.parseInt(iso.group(3))));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        return Optional.empty();
+    }
+
     private static final Pattern FOLIO_PATTERN = Pattern.compile("SD-\\d{4}-\\d{4}", Pattern.CASE_INSENSITIVE);
 
     /**
@@ -92,7 +134,7 @@ public class CanalController {
             respuesta.put("estado", null);
             respuesta.put("siguientePaso", "REGISTRAR_PACIENTE");
             String msg = "Hola, soy Salud Digna. No te tengo registrado con este numero. "
-                    + "Para ayudarte, dime tu nombre completo y tu fecha de nacimiento (AAAA-MM-DD).";
+                    + "Para ayudarte, dime tu nombre completo y tu fecha de nacimiento (DD/MM/AAAA, por ejemplo 14/05/1990).";
             respuesta.put("mensaje", msg);
             respuesta.put("respuesta", msg);
             return respuesta;
@@ -212,7 +254,7 @@ public class CanalController {
                 Tramite actualizado = tramites.seleccionarClinica(tramite.getId(), elegida.get().getId());
                 return "Listo " + nombre + ", elegiste " + elegida.get().getNombre()
                         + " para tu tramite " + actualizado.getFolio()
-                        + ". Ahora dime que dia prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).";
+                        + ". Ahora dime que dia prefieres para tu cita, en formato DD/MM/AAAA (por ejemplo 24/11/2026).";
             }
             if (norm.contains("si") || norm.contains("quiero") || norm.contains("elegir")
                     || norm.contains("clinica") || norm.contains("continuar") || norm.contains("adelante")) {
@@ -232,16 +274,15 @@ public class CanalController {
         }
 
         if (tramite.getEstado() == EstadoTramite.CLINICA_SELECCIONADA) {
-            Matcher m = FECHA_ISO.matcher(mensajeCrudo == null ? "" : mensajeCrudo);
-            if (m.find()) {
-                LocalDate fecha = LocalDate.of(Integer.parseInt(m.group(1)),
-                        Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)));
+            Optional<LocalDate> fechaOpt = extraerFecha(mensajeCrudo);
+            if (fechaOpt.isPresent()) {
+                LocalDate fecha = fechaOpt.get();
                 Tramite actualizado = tramites.confirmar(tramite.getId(), LocalDateTime.of(fecha, java.time.LocalTime.of(10, 0)));
                 return "Confirmado " + nombre + ". Tu cita del tramite " + actualizado.getFolio()
-                        + " quedo para el " + fecha + " a las 10:00. Te esperamos en la clinica.";
+                        + " quedo para el " + fecha.format(FORMATO_LATINO) + " a las 10:00. Te esperamos en la clinica.";
             }
             return "Ya tienes clinica en tu tramite " + tramite.getFolio()
-                    + ". Dime que dia prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).";
+                    + ". Dime que dia prefieres para tu cita, en formato DD/MM/AAAA (por ejemplo 24/11/2026).";
         }
 
         if (tramite.getEstado() == EstadoTramite.INICIADO || tramite.getEstado() == EstadoTramite.DATOS_PENDIENTES) {
@@ -309,7 +350,9 @@ public class CanalController {
             case CLINICA_SELECCIONADA -> "Hola " + nombre + ", ya tienes clinica en tu tramite " + tramite.getFolio()
                     + ". Dime que dia y hora prefieres para tu cita.";
             case CONFIRMADO -> "Hola " + nombre + ", tu cita del tramite " + tramite.getFolio()
-                    + " esta confirmada para el " + tramite.getFechaCita() + ". Te esperamos.";
+                    + " esta confirmada para el "
+                    + (tramite.getFechaCita() == null ? "sin fecha" : tramite.getFechaCita().format(FORMATO_LATINO_HORA))
+                    + ". Te esperamos.";
             case ATENDIDO -> "Hola " + nombre + ", tu tramite " + tramite.getFolio() + " ya fue atendido. Gracias por confiar en Salud Digna.";
         };
     }

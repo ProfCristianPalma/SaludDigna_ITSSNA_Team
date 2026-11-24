@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { esTelefono, getJourney, getTramitesPorTelefono, isApiError } from '../api';
+import { formatearFechaHora } from '../fechas';
 import type { EstadoTramite, Evento, Journey, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 import Timeline from '../components/Timeline';
@@ -172,7 +173,7 @@ export default function JourneyPage() {
             <p>
               {tramite.paciente?.nombre} · {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
               {tramite.clinica ? ` · ${tramite.clinica.nombre} (${tramite.clinica.ciudad})` : ''}
-              {tramite.fechaCita ? ` · Cita: ${tramite.fechaCita}` : ''}
+              {tramite.fechaCita ? ` · Cita: ${formatearFechaHora(tramite.fechaCita)}` : ''}
             </p>
 
             <ol className="stepper" aria-label="Progreso del trámite">

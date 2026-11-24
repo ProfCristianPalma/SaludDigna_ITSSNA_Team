@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { isApiError, registro } from '../api';
+import { esFechaLatinaValida, parsearFechaLatina } from '../fechas';
 
 export default function RegistroPage() {
   const [nombre, setNombre] = useState('');
@@ -19,9 +20,15 @@ export default function RegistroPage() {
       setError('La contraseña debe tener al menos 6 caracteres.');
       return;
     }
+    // La fecha se escribe en DD/MM/AAAA y solo se convierte a ISO al enviar a la API.
+    const fechaIso = parsearFechaLatina(fechaNacimiento);
+    if (!esFechaLatinaValida(fechaNacimiento) || !fechaIso) {
+      setError('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
+      return;
+    }
     setCargando(true);
     try {
-      await registro({ nombre, telefono, email, fechaNacimiento, password });
+      await registro({ nombre, telefono, email, fechaNacimiento: fechaIso, password });
       navigate('/app');
     } catch (err) {
       setError(
@@ -57,7 +64,14 @@ export default function RegistroPage() {
           </label>
           <label>
             Fecha de nacimiento
-            <input type="date" value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} required />
+            <input
+              type="text"
+              value={fechaNacimiento}
+              onChange={(e) => setFechaNacimiento(e.target.value)}
+              placeholder="DD/MM/AAAA"
+              inputMode="numeric"
+              required
+            />
           </label>
           <label>
             Contraseña (mínimo 6 caracteres)

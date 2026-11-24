@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorTelefono, seleccionarClinica } from '../api';
+import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import type { Clinica, Estudio, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -48,7 +49,7 @@ export default function WebPage() {
         if (perfil.paciente) {
           setNombre(perfil.paciente.nombre);
           setTelefono(perfil.paciente.telefono);
-          if (perfil.paciente.fechaNacimiento) setFechaNacimiento(perfil.paciente.fechaNacimiento);
+          if (perfil.paciente.fechaNacimiento) setFechaNacimiento(formatearFecha(perfil.paciente.fechaNacimiento));
           void cargarFolios(perfil.paciente.telefono);
           return;
         }
@@ -64,11 +65,21 @@ export default function WebPage() {
   async function handleCotizar(e: React.FormEvent) {
     e.preventDefault();
     if (!estudioId) return;
+    // La fecha se escribe en DD/MM/AAAA y solo se convierte a ISO al enviar a la API.
+    if (!esFechaLatinaValida(fechaNacimiento)) {
+      setMensaje('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
+      return;
+    }
+    const fechaIso = parsearFechaLatina(fechaNacimiento);
+    if (!fechaIso) {
+      setMensaje('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
+      return;
+    }
     setCargando(true);
     setMensaje('');
     try {
       // Cada Cotizar crea un folio NUEVO: un folio por estudio elegido.
-      const creado = await crearTramite({ nombre, telefono, fechaNacimiento, estudioId, canal: 'WEB' });
+      const creado = await crearTramite({ nombre, telefono, fechaNacimiento: fechaIso, estudioId, canal: 'WEB' });
       const cotizado = await cotizar(creado.id, estudioId);
       setTramite(cotizado);
       window.sessionStorage.setItem(FOLIO_KEY, cotizado.folio);
@@ -123,7 +134,14 @@ export default function WebPage() {
             </label>
             <label>
               Fecha de nacimiento
-              <input type="date" value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} required />
+              <input
+                type="text"
+                value={fechaNacimiento}
+                onChange={(e) => setFechaNacimiento(e.target.value)}
+                placeholder="DD/MM/AAAA"
+                inputMode="numeric"
+                required
+              />
             </label>
             <label>
               Estudio
@@ -207,7 +225,7 @@ export default function WebPage() {
                   <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado}{' '}
                   <EstadoBadge estado={t.estado} />
                   {t.clinica ? ` · ${t.clinica.nombre}` : ''}
-                  {t.fechaCita ? ` · Cita: ${t.fechaCita}` : ''}
+                  {t.fechaCita ? ` · Cita: ${formatearFechaHora(t.fechaCita)}` : ''}
                 </span>
                 <Link className="btn btn-small" to={`/journey/${encodeURIComponent(t.folio)}`}>
                   Ver Journey

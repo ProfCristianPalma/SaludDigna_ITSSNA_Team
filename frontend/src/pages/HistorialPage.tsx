@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError } from '../api';
+import { formatearFechaHora } from '../fechas';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -119,7 +120,7 @@ export default function HistorialPage() {
           <dl className="kv">
             <dt>Precio</dt><dd><strong>${t.precioCotizado}</strong></dd>
             <dt>Clínica</dt><dd>{t.clinica ? `${t.clinica.nombre} (${t.clinica.ciudad})` : 'Por elegir'}</dd>
-            <dt>Fecha de cita</dt><dd>{t.fechaCita ?? 'Por confirmar'}</dd>
+            <dt>Fecha de cita</dt><dd>{t.fechaCita ? formatearFechaHora(t.fechaCita) : 'Por confirmar'}</dd>
             <dt>Canal de origen</dt><dd>{t.canalOrigen}</dd>
             {t.datosPendientes.length > 0 && (
               <>

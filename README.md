@@ -137,6 +137,20 @@ sin trámites.
 > siempre en una migración nueva (V6, V7…), como hizo V5 con los
 > teléfonos.
 
+## Fechas en formato latinoamericano DD/MM/AAAA
+
+Todas las fechas que ve, escribe o recibe el usuario son **DD/MM/AAAA**:
+la fecha de cita se muestra como `24/11/2026 10:00`, la fecha de
+nacimiento se escribe como `14/05/1990` (con su placeholder
+`DD/MM/AAAA` y validación de fecha real: 29/02 solo en año bisiesto),
+y el bot de WhatsApp pide la fecha así (`por ejemplo 24/11/2026`).
+Por dentro, la API y Postgres siguen guardando ISO (`AAAA-MM-DD`):
+la conversión vive en `frontend/src/fechas.ts`
+(`formatearFecha`, `formatearFechaHora`, `parsearFechaLatina`) y en el
+bot (`CanalController.extraerFecha`, que acepta DD/MM/AAAA y también
+AAAA-MM-DD por compatibilidad). El timeline muestra día y hora como
+`24/11/2026 10:00`.
+
 ## Login y registro (BD real)
 
 La App (`/app`) exige sesión: ya no se escribe el teléfono a mano ni se
@@ -258,11 +272,11 @@ Endpoints: `GET /api/admin/staff`, `POST /api/admin/staff`,
 
 | # | Paciente | Teléfono | Nac. | Estudio | Estado |
 |---|---|---|---|---|---|
-| 1 | Ana García López | 2220000001 | 1990-05-14 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
-| 2 | Luis Hernández Torres | 2221112233 | 1985-03-22 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
-| 3 | María Fernanda Ruiz | 2224445566 | 1992-08-09 | Radiografía tórax $450 | CONFIRMADO (cita 2026-11-24 10:00) |
-| 4 | Carlos Mendoza Vega | 2387778899 | 1978-11-30 | Análisis sangre $380 | ATENDIDO |
-| 5 | Fernanda López Díaz | 2229990011 | 2001-06-17 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
+| 1 | Ana García López | 2220000001 | 14/05/1990 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
+| 2 | Luis Hernández Torres | 2221112233 | 22/03/1985 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
+| 3 | María Fernanda Ruiz | 2224445566 | 09/08/1992 | Radiografía tórax $450 | CONFIRMADO (cita 24/11/2026 10:00) |
+| 4 | Carlos Mendoza Vega | 2387778899 | 30/11/1978 | Análisis sangre $380 | ATENDIDO |
+| 5 | Fernanda López Díaz | 2229990011 | 17/06/2001 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
 
 Se siembran con Flyway `V2__seed.sql` + `V3__usuarios_ejemplo.sql` y con
 `DataSeeder` (idempotente, crea el trámite de cada uno en su estado).

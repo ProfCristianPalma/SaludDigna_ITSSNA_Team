@@ -12,6 +12,7 @@ import {
   normalizarTelefono,
 } from '../api';
 import type { StaffAdmin, StaffAdminInput, UsuarioAdmin, UsuarioAdminInput } from '../api';
+import { esFechaLatinaValida, formatearFecha, parsearFechaLatina } from '../fechas';
 import VistaPersonal from '../components/VistaPersonal';
 
 // Administración de usuarios: SOLO se entra escribiendo la URL
@@ -114,7 +115,7 @@ function ContenidoAdminUsuarios() {
     setNombre(u.nombre);
     setTelefono(u.telefono);
     setEmail(u.email ?? '');
-    setFechaNacimiento(u.fechaNacimiento ?? '');
+    setFechaNacimiento(u.fechaNacimiento ? formatearFecha(u.fechaNacimiento) : '');
     setPassword('');
     setMensaje('');
   }
@@ -131,11 +132,20 @@ function ContenidoAdminUsuarios() {
       setError('La contraseña es obligatoria al crear un usuario (mínimo 6 caracteres).');
       return;
     }
+    // La fecha se escribe en DD/MM/AAAA y solo se convierte a ISO al enviar a la API.
+    let fechaIso: string | undefined;
+    if (fechaNacimiento.trim()) {
+      if (!esFechaLatinaValida(fechaNacimiento)) {
+        setError('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
+        return;
+      }
+      fechaIso = parsearFechaLatina(fechaNacimiento) ?? undefined;
+    }
     const input: UsuarioAdminInput = {
       nombre: nombre.trim(),
       telefono: normalizarTelefono(telefono),
       email: email.trim() || undefined,
-      fechaNacimiento: fechaNacimiento || undefined,
+      fechaNacimiento: fechaIso,
       password: password || undefined,
     };
     setGuardando(true);
@@ -317,7 +327,13 @@ function ContenidoAdminUsuarios() {
           </label>
           <label>
             Fecha de nacimiento
-            <input type="date" value={fechaNacimiento} onChange={(e) => setFechaNacimiento(e.target.value)} />
+            <input
+              type="text"
+              value={fechaNacimiento}
+              onChange={(e) => setFechaNacimiento(e.target.value)}
+              placeholder="DD/MM/AAAA"
+              inputMode="numeric"
+            />
           </label>
           <label>
             Contraseña {editandoId ? '(dejar vacía para no cambiarla)' : '(mínimo 6 caracteres)'}
@@ -366,7 +382,7 @@ function ContenidoAdminUsuarios() {
                   <td>{u.nombre}</td>
                   <td>{u.telefono}</td>
                   <td>{u.email ?? '—'}</td>
-                  <td>{u.fechaNacimiento ?? '—'}</td>
+                  <td>{u.fechaNacimiento ? formatearFecha(u.fechaNacimiento) : '—'}</td>
                   <td>{u.cantidadFolios}</td>
                   <td>{u.tienePassword ? 'Sí' : 'Sin contraseña'}</td>
                   <td>
@@ -470,7 +486,7 @@ function ContenidoAdminUsuarios() {
                   <td>{s.usuario}</td>
                   <td>{s.nombre}</td>
                   <td>{s.rol}</td>
-                  <td>{s.createdAt ? s.createdAt.slice(0, 10) : '—'}</td>
+                  <td>{s.createdAt ? formatearFecha(s.createdAt) : '—'}</td>
                   <td>
                     <div className="actions">
                       <button type="button" className="btn btn-small" onClick={() => empezarEditarStaff(s)}>

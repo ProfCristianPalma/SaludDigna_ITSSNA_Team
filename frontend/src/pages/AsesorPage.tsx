@@ -11,6 +11,7 @@ import {
   isApiError,
 } from '../api';
 import type { Evento, Tramite } from '../types';
+import { formatearFechaHora } from '../fechas';
 import EstadoBadge from '../components/EstadoBadge';
 import Timeline from '../components/Timeline';
 import VistaPersonal from '../components/VistaPersonal';
@@ -172,7 +173,7 @@ function ContenidoAsesor() {
               <dt>Estudio</dt><dd>{tramite.estudio.nombre}</dd>
               <dt>Precio cotizado</dt><dd><strong>${tramite.precioCotizado}</strong></dd>
               <dt>Clínica</dt><dd>{tramite.clinica ? `${tramite.clinica.nombre} (${tramite.clinica.ciudad})` : 'Sin seleccionar'}</dd>
-              <dt>Fecha de cita</dt><dd>{tramite.fechaCita ?? 'Sin confirmar'}</dd>
+              <dt>Fecha de cita</dt><dd>{tramite.fechaCita ? formatearFechaHora(tramite.fechaCita) : 'Sin confirmar'}</dd>
               <dt>Canal de origen</dt><dd>{tramite.canalOrigen}</dd>
             </dl>
 

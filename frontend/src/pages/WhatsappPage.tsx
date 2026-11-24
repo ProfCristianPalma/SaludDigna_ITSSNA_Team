@@ -172,8 +172,8 @@ export default function WhatsappPage() {
             </>
           )}
           {tramite?.estado === 'CLINICA_SELECCIONADA' && (
-            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '2026-11-24')}>
-              Confirmar 2026-11-24
+            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '24/11/2026')}>
+              Confirmar 24/11/2026
             </button>
           )}
         </div>

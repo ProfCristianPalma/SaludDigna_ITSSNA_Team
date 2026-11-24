@@ -1,9 +1,11 @@
 import type { Evento } from '../types';
+import { formatearFechaHora } from '../fechas';
 
+// El timeline muestra día y hora en formato latinoamericano DD/MM/AAAA HH:MM
+// (el 'short' de es-MX recorta el año a dos dígitos: 24/11/26).
 function formatHora(timestamp: string): string {
-  const d = new Date(timestamp);
-  if (Number.isNaN(d.getTime())) return timestamp;
-  return d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+  const formateada = formatearFechaHora(timestamp);
+  return formateada || timestamp;
 }
 
 export default function Timeline({ eventos }: { eventos: Evento[] }) {

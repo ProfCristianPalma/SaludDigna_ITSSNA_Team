@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { atenderTramite, getCitasClinica, isApiError, registrarEventoCheckIn } from '../api';
+import { formatearFechaHora } from '../fechas';
 import type { CitaClinica } from '../api';
 import EstadoBadge from '../components/EstadoBadge';
 import VistaPersonal from '../components/VistaPersonal';
@@ -142,7 +143,7 @@ function ContenidoClinica() {
               <dt>Paciente</dt><dd>{c.pacienteNombre}</dd>
               <dt>Teléfono</dt><dd>{c.pacienteTelefono}</dd>
               <dt>Clínica</dt><dd>{c.clinicaNombre ? `${c.clinicaNombre} (${c.clinicaCiudad ?? ''})` : 'Sin seleccionar'}</dd>
-              <dt>Fecha de cita</dt><dd>{c.fechaCita ?? 'Sin confirmar'}</dd>
+              <dt>Fecha de cita</dt><dd>{c.fechaCita ? formatearFechaHora(c.fechaCita) : 'Sin confirmar'}</dd>
               <dt>Precio</dt><dd><strong>${c.precio ?? '—'}</strong></dd>
               <dt>Check-in</dt><dd>{checkIn[c.tramiteId] ? 'Registrado ✓' : 'Pendiente'}</dd>
             </dl>

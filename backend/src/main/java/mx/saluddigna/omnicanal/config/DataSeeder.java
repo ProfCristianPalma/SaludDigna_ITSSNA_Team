@@ -31,7 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
  * para que el asesor, WhatsApp y el Journey tengan casos que mostrar:
  * - Ana Garcia Lopez      2220000001  COTIZADO              (ana123)
  * - Luis Hernandez Torres 2221112233  CLINICA_SELECCIONADA  (luis123)
- * - Maria Fernanda Ruiz   2224445566  CONFIRMADO (cita 2026-11-24 10:00) (maria123)
+ * - Maria Fernanda Ruiz   2224445566  CONFIRMADO (cita 24/11/2026 10:00) (maria123)
  * - Carlos Mendoza Vega   2387778899  ATENDIDO              (carlos123)
  * - Fernanda Lopez Diaz   2229990011  DATOS_PENDIENTES      (fernanda123)
  * Contraseñas demo = primer nombre en minúsculas + 123, guardadas como

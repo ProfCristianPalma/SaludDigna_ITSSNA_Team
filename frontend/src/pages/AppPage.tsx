@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError, logout } from '../api';
+import { formatearFechaHora } from '../fechas';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -140,7 +141,7 @@ export default function AppPage() {
                     Precio: <strong>${t.precioCotizado}</strong>
                   </p>
                   <p>Clínica: {t.clinica ? `${t.clinica.nombre} (${t.clinica.ciudad})` : 'Por elegir'}</p>
-                  <p>Fecha: {t.fechaCita ?? 'Por confirmar'}</p>
+                  <p>Fecha: {t.fechaCita ? formatearFechaHora(t.fechaCita) : 'Por confirmar'}</p>
                   <div className="actions">
                     <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
                       Ver mi Journey
