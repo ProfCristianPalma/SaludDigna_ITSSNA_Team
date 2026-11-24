@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { enviarWhatsapp } from '../api';
-import { normalizarCurp } from '../curp';
+import { buscarCurpEnTexto, normalizarCurp } from '../curp';
 import { fechaMananaLatina } from '../fechas';
 import type { Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
@@ -21,7 +21,7 @@ export default function WhatsappPage() {
   const [identificador, setIdentificador] = useState('');
   const [texto, setTexto] = useState('');
   const [mensajes, setMensajes] = useState<MensajeChat[]>([
-    { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. Para ayudarte necesito tu CURP: escríbela arriba y dime en qué te ayudo. Con tu CURP retomo tus folios donde los dejaste.' },
+    { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. Para ayudarte necesito tu CURP: escríbela y dime en qué te ayudo. Con tu CURP retomo tus folios donde los dejaste.' },
   ]);
   const [tramite, setTramite] = useState<Tramite | null>(null);
   const [tramites, setTramites] = useState<Tramite[]>([]);
@@ -45,8 +45,36 @@ export default function WhatsappPage() {
     setMensajes((prev) => [...prev, { id: idBase, de: 'yo', texto: limpio }]);
     setTexto('');
     setEnviando(true);
+    // La CURP se recuerda entre mensajes: si viene escrita en el
+    // mensaje (no en el campo CURP), se toma de ahí y se guarda; el
+    // backend también devuelve la CURP resuelta en cada respuesta.
+    // "cambiar de CURP" / "otra CURP" olvida la CURP y la vuelve a pedir.
+    const pideOlvidarCurp = /cambiar de (la )?curp|otra curp|cambiar de paciente|olvidar (la |mi )?curp/i.test(limpio);
+    const curpEnMensaje = pideOlvidarCurp ? null : buscarCurpEnTexto(limpio);
+    const curpAEnviar = pideOlvidarCurp ? '' : curpEnMensaje ?? identificador;
+    if (pideOlvidarCurp) {
+      setIdentificador('');
+      setFolioActivo(null);
+      setTramite(null);
+      setTramites([]);
+      setOpciones([]);
+    } else if (curpEnMensaje) {
+      setIdentificador(curpEnMensaje);
+    }
     try {
-      const res = await enviarWhatsapp(identificador, limpio, sinFolio ? undefined : folioActivo ?? undefined);
+      const res = await enviarWhatsapp(curpAEnviar, limpio, sinFolio || pideOlvidarCurp ? undefined : folioActivo ?? undefined);
+      if (res.olvidarCurp) {
+        // El bot olvidó la CURP: limpiar el estado del front.
+        setIdentificador('');
+        setFolioActivo(null);
+        setTramite(null);
+        setTramites([]);
+        setOpciones([]);
+      } else if (res.curp) {
+        // El backend resolvió al paciente: guardar su CURP para los
+        // mensajes siguientes, venga del campo o del mensaje.
+        setIdentificador(res.curp);
+      }
       if (res.tramite) {
         setTramite(res.tramite);
         setFolioActivo(res.tramite.folio);
@@ -69,13 +97,22 @@ export default function WhatsappPage() {
     }
   }
 
-  // "Cambiar de folio": manda "volver" SIN el folio en contexto para
-  // que el bot liste los folios, y limpia el folio activo en el front.
+  // "Cambiar de folio": manda "cambiar de folio" SIN el folio en
+  // contexto para que el bot liste los folios, y limpia el folio
+  // activo en el front. Antes mandaba "volver", que ahora sin folio
+  // en contexto significa volver al inicio (olvida la CURP).
   async function handleCambiarFolio(e: React.MouseEvent) {
     e.preventDefault();
     setFolioActivo(null);
     setTramite(null);
-    await handleEnviar(e as unknown as React.FormEvent, 'volver', true);
+    await handleEnviar(e as unknown as React.FormEvent, 'cambiar de folio', true);
+  }
+
+  // "Cambiar de CURP": olvida la CURP recordada y le pide al bot
+  // que la vuelva a pedir (el front ya limpió su estado).
+  async function handleCambiarCurp(e: React.MouseEvent) {
+    e.preventDefault();
+    await handleEnviar(e as unknown as React.FormEvent, 'cambiar de CURP', true);
   }
 
   return (
@@ -101,6 +138,16 @@ export default function WhatsappPage() {
               style={{ marginLeft: 'auto' }}
             >
               Cambiar de folio
+            </button>
+          )}
+          {!folioActivo && identificador && (
+            <button
+              type="button"
+              className="btn btn-small btn-secondary"
+              onClick={handleCambiarCurp}
+              style={{ marginLeft: 'auto' }}
+            >
+              Cambiar de CURP
             </button>
           )}
         </div>
@@ -174,7 +221,11 @@ export default function WhatsappPage() {
             Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} />
           </p>
           <p>
-            {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
+            {tramite.estudioId ? (
+              <>{tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong></>
+            ) : (
+              <>sin estudio aún</>
+            )}
           </p>
           <p className="muted">Paciente: {tramite.paciente?.nombre ?? '—'}</p>
         </section>
@@ -187,7 +238,7 @@ export default function WhatsappPage() {
             {tramites.map((t) => (
               <li key={t.id} className="dato-row">
                 <span>
-                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
+                  <strong>{t.folio}</strong> · {t.estudioId ? <>{t.estudio.nombre} — ${t.precioCotizado} </> : 'sin estudio aún '}<EstadoBadge estado={t.estado} />
                 </span>
                 <button
                   type="button"

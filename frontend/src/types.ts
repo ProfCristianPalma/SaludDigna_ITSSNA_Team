@@ -70,6 +70,8 @@ export interface Tramite {
   estado: EstadoTramite;
   paciente?: Paciente;
   estudio: Estudio;
+  /** null cuando el trámite aún no tiene estudio (se normaliza al primer estudio del catálogo como placeholder). */
+  estudioId?: string | null;
   clinica?: Clinica | null;
   precioCotizado: number;
   fechaCita?: string | null;

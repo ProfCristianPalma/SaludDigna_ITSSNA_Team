@@ -355,6 +355,23 @@ public class CanalController {
         // Un paciente puede tener varios folios activos, uno por estudio.
         List<Tramite> activos = tramites.listarActivosDe(paciente.getId());
 
+        // "cambiar de CURP" / "otra CURP": olvidar la CURP recordada
+        // (o cambiar de paciente si el mensaje trae otra CURP).
+        // Va antes de listar/volver: es una orden sobre la identidad.
+        if (esCambiarCurp(norm)) {
+            Optional<String> nueva = CurpUtil.buscarEnTexto(texto);
+            if (nueva.isEmpty() || nueva.get().equalsIgnoreCase(paciente.getCurp())) {
+                return respuestaOlvidaCurp();
+            }
+            Optional<Paciente> porNueva = pacientes.buscarPorCurp(nueva.get());
+            if (porNueva.isEmpty()) {
+                return responderRegistro(nueva.get(), texto, norm);
+            }
+            Paciente nuevoPaciente = porNueva.get();
+            List<Tramite> activosNuevo = tramites.listarActivosDe(nuevoPaciente.getId());
+            return respuestaMenu(nuevoPaciente, activosNuevo);
+        }
+
         // La intención de listar o de volver manda sobre el contexto:
         // "muestrame mis folios" con un folio en contexto NO debe
         // devolver el estado de ese folio (captura 2, 2026-11-24), y
@@ -371,6 +388,12 @@ public class CanalController {
             return respuestaListaFolios(paciente, activos, texto, norm);
         }
         if (esVolver(norm)) {
+            // "volver" a secas y sin folio en contexto: volver al inicio,
+            // es decir, olvidar la CURP y pedirla de nuevo. Con un folio
+            // en contexto, "volver" lista los folios (como antes).
+            if (esVolverSolo(norm) && (req.folio() == null || req.folio().isBlank())) {
+                return respuestaOlvidaCurp();
+            }
             if (activos.isEmpty()) {
                 return respuestaSinTramite("Hola " + paciente.getNombre().split(" ")[0]
                         + ", aún no tienes trámites activos. Puedo cotizarte un estudio:\n" + textoEstudios(),
@@ -387,6 +410,52 @@ public class CanalController {
         Tramite tramite = null;
         boolean folioSeleccionado = false;
         boolean conContexto = req.folio() != null && !req.folio().isBlank();
+
+        // Identificación por CURP (mensaje solo con la CURP, con saludo
+        // o con "cambiar de CURP"): la CURP ES una intención entendida,
+        // no un "No entendí". El bot confirma y da las dos opciones:
+        // ver los folios o iniciar un trámite nuevo. Nunca lista los
+        // folios directo (captura 1, 2026-11-24).
+        Optional<String> curpEnMensaje = CurpUtil.buscarEnTexto(texto);
+        if (esMenuInicial(norm, curpEnMensaje.isPresent(), conContexto, paciente)) {
+            return respuestaMenu(paciente, activos);
+        }
+
+        // "Iniciar un trámite nuevo" (o cotizar sin folio en contexto):
+        // crear el trámite y preguntar el estudio, antes de resolver
+        // folio/intención, para no caer en la lista con "No entendí".
+        boolean seleccionExplicita = SELECCION_PATTERN.matcher(texto).find()
+                || FOLIO_PATTERN.matcher(texto).find()
+                || ORDINAL_MASC.matcher(norm).find();
+        if (!seleccionExplicita && esNuevoTramiteExplicito(norm)) {
+            Tramite nuevo = tramites.crearTramite(paciente.getId(), null, "WHATSAPP");
+            List<Tramite> actualizados = tramites.listarActivosDe(paciente.getId());
+            return respuestaConTramite(nuevo, actualizados, new ResultadoBot("Perfecto, "
+                    + paciente.getNombre().split(" ")[0] + ", empecé un trámite nuevo: " + nuevo.getFolio()
+                    + ". ¿Qué estudio necesitas?\n" + textoEstudios(), true, opcionesEstudios()));
+        }
+        if (!seleccionExplicita && !conContexto && esCotizacionGenerica(norm)) {
+            List<Tramite> pendientes = activos.stream()
+                    .filter(t -> t.getEstado() == EstadoTramite.INICIADO || t.getEstado() == EstadoTramite.DATOS_PENDIENTES)
+                    .toList();
+            if (pendientes.size() == 1) {
+                // Hay un solo trámite sin estudio: preguntar el estudio
+                // para ese folio, sin crear otro.
+                Tramite pendiente = pendientes.get(0);
+                return respuestaConTramite(pendiente, activos, new ResultadoBot("Claro, "
+                        + paciente.getNombre().split(" ")[0] + ", sigamos con tu trámite " + pendiente.getFolio()
+                        + " (aún sin estudio). ¿Qué estudio necesitas?\n" + textoEstudios(), true, opcionesEstudios()));
+            }
+            if (!activos.isEmpty()) {
+                Tramite nuevo = tramites.crearTramite(paciente.getId(), null, "WHATSAPP");
+                List<Tramite> actualizados = tramites.listarActivosDe(paciente.getId());
+                return respuestaConTramite(nuevo, actualizados, new ResultadoBot("Perfecto, "
+                        + paciente.getNombre().split(" ")[0] + ", empecé un trámite nuevo: " + nuevo.getFolio()
+                        + ". ¿Qué estudio necesitas?\n" + textoEstudios(), true, opcionesEstudios()));
+            }
+            // Sin folios activos: no se crea trámite aún; solo se
+            // ofrecen los estudios (el trámite se crea al elegir uno).
+        }
 
         // 1) Folio explícito en el texto (SD-2026-XXXX): manda sobre el contexto.
         Matcher folioEnTexto = FOLIO_PATTERN.matcher(texto);
@@ -572,8 +641,8 @@ public class CanalController {
                 if (existente.isPresent()) {
                     Paciente p = existente.get();
                     return respuestaSinTramite("Esa CURP ya está registrada a nombre de " + p.getNombre()
-                            + ". Escribe tu CURP para continuar con tus trámites.",
-                            "REGISTRAR_PACIENTE", true, List.of());
+                            + ". Ya te reconocí: dime en qué te ayudo (por ejemplo, \"mis folios\" o \"quiero cotizar un estudio\").",
+                            "AYUDA", true, List.of("Ver mis folios", "Iniciar un trámite nuevo"), curp);
                 }
                 throw e;
             }
@@ -581,7 +650,7 @@ public class CanalController {
         }
         String primerNombre = nuevo.getNombre().split(" ")[0];
         return respuestaSinTramite("Listo " + primerNombre + ", ya quedaste registrado con tu CURP " + nuevo.getCurp()
-                + ". ¿Qué estudio necesitas?\n" + textoEstudios(), "ELEGIR_ESTUDIO", true, opcionesEstudios());
+                + ". ¿Qué estudio necesitas?\n" + textoEstudios(), "ELEGIR_ESTUDIO", true, opcionesEstudios(), nuevo.getCurp());
     }
 
     /** Contraseña en el mensaje: "contraseña ana123", "clave: x", "password=...". Vacío si no viene. */
@@ -638,11 +707,11 @@ public class CanalController {
         if (esSaludoOAyuda(norm) || quiereCotizar(norm)) {
             String resp = "Hola " + nombre + ", soy Salud Digna 👋. Aún no tienes trámites activos. Puedo cotizarte un estudio:\n"
                     + textoEstudios();
-            return respuestaSinTramite(resp, "ELEGIR_ESTUDIO", true, opcionesEstudios());
+            return respuestaSinTramite(resp, "ELEGIR_ESTUDIO", true, opcionesEstudios(), paciente.getCurp());
         }
         String resp = "No entendí \"" + texto + "\", " + nombre + ". Aún no tienes trámites activos. Puedo cotizarte un estudio:\n"
                 + textoEstudios();
-        return respuestaSinTramite(resp, "ELEGIR_ESTUDIO", false, opcionesEstudios());
+        return respuestaSinTramite(resp, "ELEGIR_ESTUDIO", false, opcionesEstudios(), paciente.getCurp());
     }
 
     /** Varios folios y el mensaje no dice con cuál seguir: se listan y se pregunta, sin elegir al azar. */
@@ -674,6 +743,7 @@ public class CanalController {
         Map<String, Object> respuesta = respuestaSinTramite(prefacio + "\n" + listarFoliosTexto(activos),
                 "ELEGIR_FOLIO", entendido, foliosComoOpciones(activos));
         respuesta.put("tramites", activos);
+        respuesta.put("curp", paciente.getCurp());
         return respuesta;
     }
 
@@ -734,6 +804,11 @@ public class CanalController {
         respuesta.put("opciones", resultado.opciones());
         respuesta.put("entendido", resultado.entendido());
         respuesta.put("tramites", activos);
+        // CURP del paciente resuelto: el front la guarda y la reenvía
+        // en cada mensaje siguiente (memoria de CURP entre mensajes).
+        if (tramite.getPaciente() != null && tramite.getPaciente().getCurp() != null) {
+            respuesta.put("curp", tramite.getPaciente().getCurp());
+        }
         if (tramite.getEstado() == EstadoTramite.COTIZADO) {
             respuesta.put("clinicas", clinicas.findAll());
         }
@@ -751,6 +826,41 @@ public class CanalController {
         respuesta.put("entendido", entendido);
         respuesta.put("tramites", List.of());
         return respuesta;
+    }
+
+    /** Como la de 4 argumentos, pero incluye la CURP del paciente resuelto para que el front la recuerde. */
+    private Map<String, Object> respuestaSinTramite(String mensaje, String siguientePaso, boolean entendido,
+                                                     List<String> opciones, String curp) {
+        Map<String, Object> respuesta = respuestaSinTramite(mensaje, siguientePaso, entendido, opciones);
+        if (curp != null && !curp.isBlank()) {
+            respuesta.put("curp", curp);
+        }
+        return respuesta;
+    }
+
+    /** El usuario pidió olvidar la CURP ("cambiar de CURP", "volver" sin folio): el front limpia su estado. */
+    private Map<String, Object> respuestaOlvidaCurp() {
+        Map<String, Object> respuesta = respuestaSinTramite(
+                "Claro, olvidé tu CURP. Escríbela de nuevo (18 caracteres, por ejemplo GALA900514MDFRPN00) y seguimos con tus trámites.",
+                "REGISTRAR_PACIENTE", true, List.of());
+        respuesta.put("olvidarCurp", true);
+        return respuesta;
+    }
+
+    /**
+     * Menú tras identificar por CURP: confirma con entendido=true y
+     * da las dos opciones (ver los folios o iniciar un trámite nuevo).
+     * NO lista los folios directo: la lista llega solo si el usuario
+     * elige "Ver mis folios".
+     */
+    private Map<String, Object> respuestaMenu(Paciente paciente, List<Tramite> activos) {
+        String nombre = paciente.getNombre().split(" ")[0];
+        if (activos.isEmpty()) {
+            return respuestaSinTramite("Perfecto, " + nombre + ", te reconocí por tu CURP. Aún no tienes trámites activos. ¿Qué estudio necesitas?\n" + textoEstudios(),
+                    "ELEGIR_ESTUDIO", true, opcionesEstudios(), paciente.getCurp());
+        }
+        return respuestaSinTramite("Perfecto, " + nombre + ", te reconocí por tu CURP. ¿Qué quieres hacer?",
+                "ELEGIR_ACCION", true, List.of("Ver mis folios", "Iniciar un trámite nuevo"), paciente.getCurp());
     }
 
     /**
@@ -824,6 +934,7 @@ public class CanalController {
                 + ". ¿Con cuál seguimos?\n" + listarFoliosTexto(activos);
         Map<String, Object> respuesta = respuestaSinTramite(msg, "ELEGIR_FOLIO", true, foliosComoOpciones(activos));
         respuesta.put("tramites", activos);
+        respuesta.put("curp", paciente.getCurp());
         return respuesta;
     }
 
@@ -1250,7 +1361,9 @@ public class CanalController {
                 || norm.contains("mostrar mis folios") || norm.contains("mostrar mis tramites")
                 || norm.contains("cuales son mis folios") || norm.contains("cuales son mis tramites")
                 || norm.contains("que folios tengo") || norm.contains("que tramites tengo")
-                || norm.contains("todos mis folios") || norm.contains("todos mis tramites");
+                || norm.contains("todos mis folios") || norm.contains("todos mis tramites")
+                || norm.equals("seguimiento") || norm.contains("dar seguimiento")
+                || norm.contains("seguimiento de mis folios") || norm.contains("seguir mis folios");
     }
 
     /** Volver / cambiar de folio: olvida el contexto y lista los folios para elegir otro. "cambiar clínica" y "otro estudio" NO son volver. */
@@ -1261,6 +1374,58 @@ public class CanalController {
                 || norm.contains("otro tramite") || norm.contains("salir de este folio")
                 || norm.contains("salir del folio") || norm.contains("cambiar de tramite")) return true;
         return Pattern.compile("\\b(volver|regresar|atras)\\b").matcher(norm).find();
+    }
+
+    /** El usuario quiere olvidar la CURP recordada y empezar de cero (o cambiar de paciente). */
+    private boolean esCambiarCurp(String norm) {
+        return norm.contains("cambiar de curp") || norm.contains("otra curp") || norm.contains("cambiar de paciente")
+                || norm.contains("olvidar mi curp") || norm.contains("olvidar la curp");
+    }
+
+    /** "volver" / "regresar" / "atrás" a secas: volver al inicio. Con folio en contexto es otra cosa (lista folios). */
+    private boolean esVolverSolo(String norm) {
+        String t = norm.trim();
+        return t.equals("volver") || t.equals("regresar") || t.equals("atras")
+                || t.equals("volver al inicio") || t.equals("volver al menu") || t.equals("regresar al inicio");
+    }
+
+    /**
+     * El mensaje es solo la identificación por CURP (con saludo o
+     * relleno): hay que dar el menú, no la lista ni un "No entendí".
+     * Con una selección de folio explícita no es el menú.
+     */
+    private boolean esMenuInicial(String norm, boolean curpEnMensaje, boolean conContexto, Paciente paciente) {
+        if (conContexto) return false;
+        if (!curpEnMensaje && !esSaludoOAyuda(norm)) return false;
+        String resto = norm.replaceAll("[a-z]{4}\\d{6}[hm][a-z]{2}[a-z]{3}[a-z\\d]\\d", " ");
+        resto = resto.replaceAll("cambiar de (la )?curp|otra curp|mi curp es|la curp es|mi curp|hola|buenas|buenos dias|tardes|noches|soy|me llamo|es", " ");
+        resto = resto.replaceAll("[^a-z0-9 ]", " ").replaceAll("\\s+", " ").trim();
+        if (!resto.isEmpty()) {
+            // El resto es solo el nombre del paciente ("hola, soy Fernanda"): también es el menú.
+            String nombreNorm = normalizar(paciente.getNombre());
+            String primerNombre = normalizar(paciente.getNombre().split(" ")[0]);
+            if (!resto.equals(nombreNorm) && !resto.equals(primerNombre)) return false;
+        }
+        if (SELECCION_PATTERN.matcher(norm).find() || FOLIO_PATTERN.matcher(norm).find()
+                || ORDINAL_MASC.matcher(norm).find() || ORDINAL_FEM.matcher(norm).find()) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Petición explícita de un trámite nuevo (botón "Iniciar un trámite nuevo" u equivalente). */
+    private boolean esNuevoTramiteExplicito(String norm) {
+        return norm.contains("iniciar un tramite nuevo") || norm.contains("tramite nuevo")
+                || norm.contains("nuevo tramite") || norm.contains("iniciar tramite")
+                || norm.contains("nueva reservacion") || norm.contains("hacer una reservacion")
+                || norm.contains("quiero reservar") || norm.contains("reservar un estudio")
+                || norm.contains("empezar un tramite");
+    }
+
+    /** Cotización genérica ("quiero cotizar", "quiero un estudio") sin estudio concreto. */
+    private boolean esCotizacionGenerica(String norm) {
+        return norm.contains("quiero cotizar") || norm.contains("quiero un estudio")
+                || norm.contains("necesito un estudio") || norm.equals("cotizar");
     }
 
     /** Afirmación ("sí", "confirmo", "dale", "va", "de acuerdo", "ok", "vale", "claro"): nunca es un "no entendí"; lo que hace depende del estado. */

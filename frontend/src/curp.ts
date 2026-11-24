@@ -28,6 +28,18 @@ export function esCurp(texto: string | null | undefined): boolean {
   return /^[A-Z]{4}[A-Z0-9]{14}$/.test(c);
 }
 
+/**
+ * Busca una CURP dentro de un texto libre (mismo patrón que el backend:
+ * CurpUtil.PATRON_EN_TEXTO) y la devuelve normalizada, o null si no hay.
+ * Sirve para que el front reconozca la CURP cuando el usuario la escribe
+ * como mensaje (no en el campo CURP) y la recuerde de ahí en adelante.
+ */
+export function buscarCurpEnTexto(texto: string | null | undefined): string | null {
+  if (!texto) return null;
+  const m = texto.toUpperCase().match(/[A-Z]{4}\d{6}[HM][A-Z]{2}[A-Z]{3}[A-Z\d]\d/);
+  return m ? m[0] : null;
+}
+
 export interface ValidacionCurp {
   valida: boolean;
   motivo: string;

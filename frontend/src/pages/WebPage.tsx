@@ -109,6 +109,11 @@ export default function WebPage() {
 
   const estudioSeleccionado = estudios.find((e) => e.id === estudioId);
 
+  // Clínica efectiva: la del desplegable o, si el trámite ya trae una,
+  // la del trámite. Así el calendario y la parrilla aparecen en cuanto
+  // se elige estudio y clínica, sin obligar a pulsar "Seleccionar clínica".
+  const clinicaEfectivaId = clinicaId || tramite?.clinica?.id || '';
+
   async function handleCotizar(e: React.FormEvent) {
     e.preventDefault();
     if (!estudioId) return;
@@ -157,6 +162,11 @@ export default function WebPage() {
       });
       const cotizado = await cotizar(creado.id, estudioId);
       setTramite(cotizado);
+      // Reservación nueva: la clínica, la fecha y la hora se eligen de
+      // cero (no arrastrar las de la reservación anterior).
+      setClinicaId('');
+      fijarFechaISO('');
+      setHora('');
       window.sessionStorage.setItem(FOLIO_KEY, cotizado.folio);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
       await recargarFolios();
@@ -182,6 +192,10 @@ export default function WebPage() {
         }
         if (nuevo) {
           setTramite(nuevo);
+          // Reservación nueva: la clínica, la fecha y la hora se eligen de cero.
+          setClinicaId('');
+          fijarFechaISO('');
+          setHora('');
           window.sessionStorage.setItem(FOLIO_KEY, nuevo.folio);
           setMensaje(
             `La respuesta tardó, pero tu folio sí se creó: ${nuevo.folio}. Ya lo puedes ver en tu Historial.`,
@@ -201,10 +215,10 @@ export default function WebPage() {
   }
 
   async function handleClinica() {
-    if (!tramite || !clinicaId) return;
+    if (!tramite || !clinicaEfectivaId) return;
     setCargando(true);
     try {
-      const actualizado = await seleccionarClinica(tramite.id, clinicaId);
+      const actualizado = await seleccionarClinica(tramite.id, clinicaEfectivaId);
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
       await cargarFolios(sesionPaciente?.id, curpEfectiva);
@@ -223,8 +237,16 @@ export default function WebPage() {
     }
     setCargando(true);
     try {
+      // Si la clínica se eligió en el desplegable pero aún no se pulsó
+      // "Seleccionar clínica", se guarda ahora: confirmar exige
+      // CLINICA_SELECCIONADA y rechazaría la reservación.
+      let tramiteActual = tramite;
+      if (tramite.estado === 'COTIZADO' && clinicaEfectivaId) {
+        tramiteActual = await seleccionarClinica(tramite.id, clinicaEfectivaId);
+        setTramite(tramiteActual);
+      }
       const fechaHoraISO = `${fechaISO}T${hora}:00`;
-      const confirmado = await confirmar(tramite.id, fechaHoraISO);
+      const confirmado = await confirmar(tramiteActual.id, fechaHoraISO);
       setTramite(confirmado);
       setMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,
@@ -330,7 +352,7 @@ export default function WebPage() {
 
               <h3>Elige clínica</h3>
               <div className="form">
-                <select value={clinicaId} onChange={(e) => setClinicaId(e.target.value)}>
+                <select value={clinicaEfectivaId} onChange={(e) => setClinicaId(e.target.value)}>
                   <option value="">Selecciona una clínica</option>
                   {clinicas.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -338,13 +360,15 @@ export default function WebPage() {
                     </option>
                   ))}
                 </select>
-                <button type="button" className="btn btn-secondary" onClick={handleClinica} disabled={!clinicaId || cargando}>
-                  Seleccionar clínica
-                </button>
+                {tramite.estado === 'COTIZADO' && (
+                  <button type="button" className="btn btn-secondary" onClick={handleClinica} disabled={!clinicaEfectivaId || cargando}>
+                    Seleccionar clínica
+                  </button>
+                )}
               </div>
               {tramite.clinica && <p>Clínica: <strong>{tramite.clinica.nombre}</strong> ({tramite.clinica.ciudad})</p>}
 
-              {tramite.estado === 'CLINICA_SELECCIONADA' && (
+              {(tramite.estado === 'COTIZADO' || tramite.estado === 'CLINICA_SELECCIONADA') && clinicaEfectivaId && (
                 <>
                   <h3>Elige fecha y hora de tu cita</h3>
                   <div className="form">
@@ -364,7 +388,7 @@ export default function WebPage() {
                     </label>
                   </div>
                   <ParrillaHorarios
-                    clinicaId={tramite.clinica?.id ?? ''}
+                    clinicaId={clinicaEfectivaId}
                     fechaISO={fechaISO}
                     estudioId={tramite.estudio.id}
                     exceptoTramiteId={tramite.id}

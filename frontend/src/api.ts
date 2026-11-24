@@ -312,6 +312,7 @@ export function normalizeTramite(raw: Record<string, unknown>): Tramite {
     estado: raw.estado as Tramite['estado'],
     paciente,
     estudio,
+    estudioId: raw.estudioId != null ? String(raw.estudioId) : null,
     clinica,
     precioCotizado: Number(raw.precioCotizado ?? estudio.precio),
     fechaCita: (raw.fechaCita as string | null) ?? null,
@@ -872,6 +873,10 @@ export async function enviarWhatsapp(
   opciones?: string[];
   /** Si el bot entendió la intención (false = respondió "No entendí"). */
   entendido?: boolean;
+  /** CURP del paciente resuelto en esta respuesta: el front la guarda y la reenvía. */
+  curp?: string;
+  /** El usuario pidió olvidar la CURP: el front limpia su estado. */
+  olvidarCurp?: boolean;
 }> {
   // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
   // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso, opciones, entendido } y,
@@ -894,6 +899,8 @@ export async function enviarWhatsapp(
     tramites: tramitesRaw ? tramitesRaw.map(normalizeTramite) : undefined,
     opciones: Array.isArray(raw.opciones) ? (raw.opciones as string[]) : undefined,
     entendido: typeof raw.entendido === 'boolean' ? raw.entendido : undefined,
+    curp: typeof raw.curp === 'string' && raw.curp ? raw.curp : undefined,
+    olvidarCurp: raw.olvidarCurp === true ? true : undefined,
   };
 }
 
