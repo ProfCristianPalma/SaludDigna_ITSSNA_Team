@@ -76,6 +76,13 @@ export default function App() {
 
   const nombreSesion = sesion?.paciente?.nombre.split(' ')[0] ?? sesion?.usuario ?? null;
 
+  // Asesor y Clínica son del personal: sus enlaces solo se ven con
+  // sesión de asesor o admin. Sin sesión, o con sesión de paciente,
+  // no aparecen en el nav. Esto es solo visibilidad: la protección
+  // real está en cada página (VistaPersonal), que pide el login de
+  // personal aunque se entre por URL directa.
+  const esPersonal = sesion?.rol === 'ASESOR' || sesion?.rol === 'ADMINISTRADOR';
+
   return (
     <div className="app-shell">
       <header className="topnav">
@@ -90,10 +97,10 @@ export default function App() {
           <NavLink to="/">Inicio</NavLink>
           <NavLink to="/cotizar">Cotizar</NavLink>
           <NavLink to="/whatsapp">WhatsApp</NavLink>
-          <NavLink to="/asesor">Asesor</NavLink>
+          {esPersonal && <NavLink to="/asesor">Asesor</NavLink>}
           <NavLink to="/app">App</NavLink>
           <NavLink to="/historial">Historial</NavLink>
-          <NavLink to="/clinica">Clínica</NavLink>
+          {esPersonal && <NavLink to="/clinica">Clínica</NavLink>}
           <NavLink to="/journey">Journey</NavLink>
         </nav>
         <nav className="nav-links" aria-label="Sesión">

@@ -111,6 +111,8 @@ enlaza a la App y al Historial. La App (`/app`) y el Historial
 El control es a nivel de front en este demo: las API no exigen rol
 todavía, así que quien conozca la URL de un endpoint podría llamarlo
 directo. Para el hackatón el candado está en la página, no en la API.
+Los enlaces a Asesor y Clínica tampoco aparecen en el menú si no hay
+sesión de personal: solo se ven con rol asesor o admin.
 
 ## Teléfonos a 10 dígitos, sin +52 (momentáneo)
 
