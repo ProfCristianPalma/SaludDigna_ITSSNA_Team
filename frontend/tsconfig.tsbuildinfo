@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/mock.ts","./src/types.ts","./src/components/EstadoBadge.tsx","./src/components/Timeline.tsx","./src/pages/AppPage.tsx","./src/pages/AsesorPage.tsx","./src/pages/ClinicaPage.tsx","./src/pages/JourneyPage.tsx","./src/pages/WebPage.tsx","./src/pages/WhatsappPage.tsx"],"version":"5.9.3"}

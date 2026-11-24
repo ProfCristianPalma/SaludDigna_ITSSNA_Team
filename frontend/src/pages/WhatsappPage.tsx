@@ -24,9 +24,9 @@ export default function WhatsappPage() {
     finRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensajes]);
 
-  async function handleEnviar(e: React.FormEvent) {
+  async function handleEnviar(e: React.FormEvent, textoForzado?: string) {
     e.preventDefault();
-    const limpio = texto.trim();
+    const limpio = (textoForzado ?? texto).trim();
     if (!limpio) return;
     const idBase = Date.now();
     setMensajes((prev) => [...prev, { id: idBase, de: 'yo', texto: limpio }]);
@@ -87,6 +87,32 @@ export default function WhatsappPage() {
             {enviando ? '…' : 'Enviar'}
           </button>
         </form>
+
+        {/* Respuestas rápidas: la demo no depende de que el bot adivine
+            texto libre. Cada botón manda el texto exacto que el backend
+            y el mock saben interpretar. */}
+        <div className="wa-quick" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
+          {(!tramite || tramite.estado === 'COTIZADO') && (
+            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, 'Sí, quiero elegir clínica')}>
+              Sí, elegir clínica
+            </button>
+          )}
+          {tramite?.estado === 'COTIZADO' && (
+            <>
+              <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '1')}>
+                1 · Puebla Centro
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '2')}>
+                2 · Tehuacán
+              </button>
+            </>
+          )}
+          {tramite?.estado === 'CLINICA_SELECCIONADA' && (
+            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '2026-11-24')}>
+              Confirmar 2026-11-24
+            </button>
+          )}
+        </div>
       </div>
 
       {tramite && (

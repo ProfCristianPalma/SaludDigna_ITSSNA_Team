@@ -1,15 +1,26 @@
 package mx.saluddigna.omnicanal.canales;
 
 import jakarta.validation.constraints.NotBlank;
+import java.text.Normalizer;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import mx.saluddigna.omnicanal.catalogo.ClinicaRepository;
+import mx.saluddigna.omnicanal.catalogo.EstudioRepository;
+import mx.saluddigna.omnicanal.catalogo.domain.Clinica;
+import mx.saluddigna.omnicanal.catalogo.domain.Estudio;
 import mx.saluddigna.omnicanal.eventos.EventoService;
 import mx.saluddigna.omnicanal.eventos.domain.TipoEvento;
 import mx.saluddigna.omnicanal.identidad.PacienteService;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
 import mx.saluddigna.omnicanal.tramite.TramiteService;
+import mx.saluddigna.omnicanal.tramite.domain.EstadoTramite;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,6 +33,14 @@ import org.springframework.web.server.ResponseStatusException;
  * Adaptadores de canal. En el hackaton son endpoints simulados:
  * WhatsApp y Call Center no se conectan a proveedores reales, pero
  * comparten el mismo tramite y el mismo log de eventos que la Web/App.
+ *
+ * El bot de WhatsApp es una maquina de estados guiada por texto:
+ * cada mensaje se interpreta segun el estado actual del tramite
+ * (COTIZADO -> elegir clinica con 1/2, CLINICA_SELECCIONADA ->
+ * confirmar con una fecha AAAA-MM-DD). Antes de este arreglo el
+ * endpoint solo devolvia un mensaje segun el estado, sin leer la
+ * intencion del usuario, asi que un "si" repetia el mismo texto
+ * una y otra vez.
  */
 @RestController
 @RequestMapping("/api/canales")
@@ -30,11 +49,17 @@ public class CanalController {
     private final PacienteService pacientes;
     private final TramiteService tramites;
     private final EventoService eventos;
+    private final ClinicaRepository clinicas;
+    private final EstudioRepository estudios;
 
-    public CanalController(PacienteService pacientes, TramiteService tramites, EventoService eventos) {
+    public CanalController(PacienteService pacientes, TramiteService tramites,
+                           EventoService eventos, ClinicaRepository clinicas,
+                           EstudioRepository estudios) {
         this.pacientes = pacientes;
         this.tramites = tramites;
         this.eventos = eventos;
+        this.clinicas = clinicas;
+        this.estudios = estudios;
     }
 
     public record MensajeWhatsappRequest(@NotBlank String telefono, @NotBlank String mensaje) {
@@ -43,12 +68,8 @@ public class CanalController {
     public record NotaCallCenterRequest(UUID tramiteId, String nota) {
     }
 
-    /**
-     * Mensaje entrante de WhatsApp (simulado).
-     * Resuelve al paciente por telefono, recupera su tramite activo
-     * (cualquier estado salvo ATENDIDO) o crea uno nuevo, y responde
-     * con el estado actual y el siguiente paso en lenguaje humano.
-     */
+    private static final Pattern FECHA_ISO = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
+
     @PostMapping("/whatsapp/mensaje")
     public Map<String, Object> mensajeWhatsapp(@RequestBody MensajeWhatsappRequest req) {
         Optional<Paciente> pacienteOpt = pacientes.buscarPorTelefono(req.telefono());
@@ -57,8 +78,10 @@ public class CanalController {
             respuesta.put("tramite", null);
             respuesta.put("estado", null);
             respuesta.put("siguientePaso", "REGISTRAR_PACIENTE");
-            respuesta.put("mensaje", "Hola, soy Salud Digna. No te tengo registrado con este numero. "
-                    + "Para ayudarte, dime tu nombre completo y tu fecha de nacimiento (AAAA-MM-DD).");
+            String msg = "Hola, soy Salud Digna. No te tengo registrado con este numero. "
+                    + "Para ayudarte, dime tu nombre completo y tu fecha de nacimiento (AAAA-MM-DD).";
+            respuesta.put("mensaje", msg);
+            respuesta.put("respuesta", msg);
             return respuesta;
         }
         Paciente paciente = pacienteOpt.get();
@@ -74,12 +97,115 @@ public class CanalController {
         eventos.registrar(tramite.getId(), TipoEvento.CANAL_CAMBIADO, "WHATSAPP", "PACIENTE",
                 "{\"mensaje\":\"" + escapar(req.mensaje()) + "\",\"canalAnterior\":\"" + tramite.getCanalOrigen() + "\"}");
 
+        // Interpreta la intencion segun el estado actual. Puede avanzar el tramite.
+        String textoRespuesta = procesarIntencion(paciente, tramite, req.mensaje());
+        // Releer por si procesarIntencion cambio el estado.
+        tramite = tramites.buscar(tramite.getId());
+
         Map<String, Object> respuesta = new LinkedHashMap<>();
         respuesta.put("tramite", tramite);
         respuesta.put("estado", tramite.getEstado().name());
         respuesta.put("siguientePaso", TramiteService.siguientePaso(tramite.getEstado()));
-        respuesta.put("mensaje", mensajeHumano(paciente, tramite, creado));
+        respuesta.put("mensaje", textoRespuesta);
+        respuesta.put("respuesta", textoRespuesta);
+        if (tramite.getEstado() == EstadoTramite.COTIZADO) {
+            respuesta.put("clinicas", clinicas.findAll());
+        }
         return respuesta;
+    }
+
+    private String procesarIntencion(Paciente paciente, Tramite tramite, String mensajeCrudo) {
+        String nombre = paciente.getNombre().split(" ")[0];
+        String norm = normalizar(mensajeCrudo);
+
+        if (tramite.getEstado() == EstadoTramite.COTIZADO) {
+            Optional<Clinica> elegida = elegirClinica(norm);
+            if (elegida.isPresent()) {
+                Tramite actualizado = tramites.seleccionarClinica(tramite.getId(), elegida.get().getId());
+                return "Listo " + nombre + ", elegiste " + elegida.get().getNombre()
+                        + " para tu tramite " + actualizado.getFolio()
+                        + ". Ahora dime que dia prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).";
+            }
+            if (norm.contains("si") || norm.contains("quiero") || norm.contains("elegir")
+                    || norm.contains("clinica") || norm.contains("continuar") || norm.contains("adelante")) {
+                List<Clinica> lista = clinicas.findAll();
+                StringBuilder sb = new StringBuilder();
+                sb.append("Perfecto ").append(nombre).append(", continuamos tu tramite ")
+                        .append(tramite.getFolio())
+                        .append(". Elige una clinica respondiendo con el numero:\n");
+                for (int i = 0; i < lista.size(); i++) {
+                    sb.append(i + 1).append(") ").append(lista.get(i).getNombre())
+                            .append(" (").append(lista.get(i).getCiudad()).append(")\n");
+                }
+                sb.append("Responde 1 o 2, o escribe el nombre de la clinica.");
+                return sb.toString();
+            }
+            return mensajeHumano(paciente, tramite, false);
+        }
+
+        if (tramite.getEstado() == EstadoTramite.CLINICA_SELECCIONADA) {
+            Matcher m = FECHA_ISO.matcher(mensajeCrudo == null ? "" : mensajeCrudo);
+            if (m.find()) {
+                LocalDate fecha = LocalDate.of(Integer.parseInt(m.group(1)),
+                        Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)));
+                Tramite actualizado = tramites.confirmar(tramite.getId(), LocalDateTime.of(fecha, java.time.LocalTime.of(10, 0)));
+                return "Confirmado " + nombre + ". Tu cita del tramite " + actualizado.getFolio()
+                        + " quedo para el " + fecha + " a las 10:00. Te esperamos en la clinica.";
+            }
+            return "Ya tienes clinica en tu tramite " + tramite.getFolio()
+                    + ". Dime que dia prefieres para tu cita, en formato AAAA-MM-DD (por ejemplo 2026-11-24).";
+        }
+
+        if (tramite.getEstado() == EstadoTramite.INICIADO || tramite.getEstado() == EstadoTramite.DATOS_PENDIENTES) {
+            Optional<Estudio> estudio = elegirEstudio(norm);
+            if (estudio.isPresent()) {
+                Tramite actualizado = tramites.cotizar(tramite.getId(), estudio.get().getId());
+                return "Hola " + nombre + ", tu tramite " + actualizado.getFolio()
+                        + " ya esta cotizado: " + estudio.get().getNombre()
+                        + " por $" + actualizado.getPrecioCotizado()
+                        + ". Responde SI para elegir clinica.";
+            }
+            return mensajeHumano(paciente, tramite, false);
+        }
+
+        return mensajeHumano(paciente, tramite, false);
+    }
+
+    private Optional<Clinica> elegirClinica(String norm) {
+        List<Clinica> lista = clinicas.findAll();
+        if (lista.isEmpty()) return Optional.empty();
+        String token = norm.trim();
+        if (token.equals("1") || norm.contains("puebla") || norm.contains("centro")) {
+            return lista.stream().filter(c -> normalizar(c.getNombre()).contains("puebla")).findFirst()
+                    .or(() -> Optional.of(lista.get(0)));
+        }
+        if (token.equals("2") || norm.contains("tehuacan")) {
+            return lista.stream().filter(c -> normalizar(c.getNombre()).contains("tehuacan")).findFirst()
+                    .or(() -> lista.size() > 1 ? Optional.of(lista.get(1)) : Optional.of(lista.get(0)));
+        }
+        for (Clinica c : lista) {
+            if (norm.contains(normalizar(c.getNombre())) || normalizar(c.getNombre()).contains(norm) && norm.length() > 4) {
+                return Optional.of(c);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Estudio> elegirEstudio(String norm) {
+        for (Estudio e : estudios.findAll()) {
+            String n = normalizar(e.getNombre());
+            if (norm.contains("ultrasonido") && n.contains("ultrasonido")) return Optional.of(e);
+            if (norm.contains("tiroideo") && n.contains("tiroideo")) return Optional.of(e);
+            if (norm.contains("radiografia") && n.contains("radiografia")) return Optional.of(e);
+            if ((norm.contains("analisis") || norm.contains("sangre")) && n.contains("analisis")) return Optional.of(e);
+        }
+        return Optional.empty();
+    }
+
+    private String normalizar(String s) {
+        if (s == null) return "";
+        String sinAcentos = Normalizer.normalize(s, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+        return sinAcentos.toLowerCase().trim();
     }
 
     private String mensajeHumano(Paciente paciente, Tramite tramite, boolean creado) {
