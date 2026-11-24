@@ -226,6 +226,51 @@ async function mensajeDeError(res: Response, path: string): Promise<string> {
   return `HTTP ${res.status} en ${path}`;
 }
 
+// --- Trámite ya existente (retomar en vez de duplicar) ----------------
+// Cuando se intenta crear/cotizar un estudio que el paciente ya tiene
+// en un trámite ACTIVO, el backend devuelve 409 con un JSON en el
+// mensaje: {tramiteExistente, tramiteId, folio, estado, estudio,
+// faltantes ("clinica,fecha,hora"), mensaje}. El front lo lee con esto
+// y ofrece retomar ese folio con solo los pasos que le faltan, sin
+// crear uno nuevo. Otros 409 (hueco ocupado, check-in duplicado,
+// CURP/teléfono en choque) traen mensaje plano y devuelven null.
+export interface TramiteExistenteInfo {
+  tramiteId: string;
+  folio: string;
+  estado: string;
+  estudio: string;
+  /** Subconjunto de "clinica" / "fecha" / "hora". */
+  faltantes: string[];
+  mensaje: string;
+}
+
+export function parsearTramiteExistente(err: unknown): TramiteExistenteInfo | null {
+  if (!isApiError(err) || err.status !== 409) return null;
+  try {
+    const j = JSON.parse(err.message) as Record<string, unknown>;
+    if (j.tramiteExistente !== true || typeof j.tramiteId !== 'string') return null;
+    const faltantesRaw = typeof j.faltantes === 'string' ? j.faltantes : '';
+    return {
+      tramiteId: j.tramiteId,
+      folio: typeof j.folio === 'string' ? j.folio : '',
+      estado: typeof j.estado === 'string' ? j.estado : '',
+      estudio: typeof j.estudio === 'string' ? j.estudio : '',
+      faltantes: faltantesRaw ? faltantesRaw.split(',').filter(Boolean) : [],
+      mensaje: typeof j.mensaje === 'string' ? j.mensaje : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Texto humano de lo que le falta a un trámite para completarse. */
+export function textoFaltantes(faltantes: string[]): string {
+  const partes: string[] = [];
+  if (faltantes.includes('clinica')) partes.push('elegir clínica');
+  if (faltantes.includes('fecha') || faltantes.includes('hora')) partes.push('elegir fecha y hora');
+  return partes.length > 0 ? partes.join(' y ') : 'ya está completo';
+}
+
 // --- Resolucion de identificadores ---------------------------------------
 // Un tramite se puede pedir por UUID (id interno), por folio SD-2026-XXXX
 // o por telefono (devuelve el tramite activo mas reciente de ese paciente).

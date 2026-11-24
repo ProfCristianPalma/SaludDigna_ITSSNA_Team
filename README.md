@@ -242,9 +242,10 @@ paciente logueado, y solo se ven **sus** folios.
 4. Cierra sesión y entra como Luis (`2221112233` / `luis123`):
    la App ahora dice "Hola, Luis" y muestra **sus** folios, no los de Ana.
 
-Datos semilla: 4 estudios (Ultrasonido abdominal $850, Perfil tiroideo $620,
-Radiografía tórax $450, Análisis sangre $380) y 2 clínicas (Clínica Puebla
-Centro, Clínica Salud Digna Tehuacán).
+Datos semilla: 6 estudios (Ultrasonido abdominal $850, Perfil tiroideo $620,
+Radiografía tórax $450, Análisis sangre $380, Electrocardiograma $450,
+Mastografía $950) y 2 clínicas (Clínica Puebla Centro, Clínica Salud Digna
+Tehuacán).
 
 ## Persistencia: nada volátil
 
@@ -370,7 +371,17 @@ solo en el navegador. Web, WhatsApp, Call Center, App, Clínica y Journey
 leen y escriben sobre los mismos trámites.
 
 - **Cómo se crean:** en la Web, cada Cotizar crea un **folio nuevo** (un
-  folio por estudio). Si Ana cotiza Ultrasonido y luego Perfil tiroideo,
+  folio por estudio), **salvo que el paciente ya tenga un trámite ACTIVO
+  de ese estudio**: entonces NO se crea otro. El backend devuelve 409 con
+  el folio existente y lo que le falta (clínica / fecha / hora), y la
+  Web, el Asesor y WhatsApp ofrecen **retomarlo** para completar solo
+  los pasos que faltan sobre ese mismo folio. Repetir un estudio ya
+  ATENDIDO, NO_PRESENTADO o NO_REALIZADO sí crea un folio nuevo: es
+  historial, no un duplicado. Los duplicados que ya había en la BD de
+  las pruebas (p. ej. Ana con 2 folios de Ultrasonido COTIZADO) los
+  limpia la migración V9 (conserva el de estado más avanzado y, en
+  empate, el más reciente; nunca toca los terminales).
+  Si Ana cotiza Ultrasonido y luego Perfil tiroideo,
   tiene 2 folios distintos. La Web muestra la lista "Mis folios" con todos
   los de esa CURP.
 - **Cómo se busca:** por **CURP** (`GET /api/pacientes?curp=` y luego sus

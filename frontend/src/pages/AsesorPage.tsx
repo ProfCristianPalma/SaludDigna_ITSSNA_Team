@@ -19,7 +19,9 @@ import {
   guardarNotaCallCenter,
   isApiError,
   normalizarFolio,
+  parsearTramiteExistente,
   seleccionarClinica,
+  textoFaltantes,
 } from '../api';
 import { esCurp, normalizarCurp, validarCurp } from '../curp';
 import type { Clinica, Estudio, Evento, Paciente, Tramite } from '../types';
@@ -315,6 +317,30 @@ function ContenidoAsesor() {
       setResTramite(cotizado);
       setResMensaje(`Reservación creada. Folio ${cotizado.folio}. Ahora elige la clínica.`);
     } catch (err) {
+      // Retomar en vez de duplicar: el paciente ya tiene un trámite
+      // ACTIVO de ese estudio (409 con el folio existente y lo que le
+      // falta). Se carga ese folio y el asesor continúa con solo los
+      // pasos que le faltan, sin crear uno nuevo. El botón de crear
+      // queda deshabilitado (resTramite ya existe) y la clínica ya
+      // elegida en ese folio se prellena para la parrilla.
+      const existente = parsearTramiteExistente(err);
+      if (existente) {
+        try {
+          const t = await getTramitePorFolio(existente.folio);
+          setResTramite(t);
+          setResClinicaId(t.clinica?.id ?? '');
+          setResFechaISO('');
+          setResFechaLatina('');
+          setResHora('');
+          setResMensaje(
+            `${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa con ese folio, sin crear uno nuevo.`,
+          );
+          return;
+        } catch {
+          setResMensaje(existente.mensaje);
+          return;
+        }
+      }
       setResMensaje(
         isApiError(err)
           ? `No se pudo crear la reservación (HTTP ${err.status}: ${err.message}).`

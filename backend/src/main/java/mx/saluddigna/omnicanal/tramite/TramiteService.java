@@ -70,12 +70,73 @@ public class TramiteService {
         if (estudioId != null && !estudios.existsById(estudioId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Estudio no encontrado: " + estudioId);
         }
+        // Un paciente solo tiene UN trámite activo por estudio: si ya
+        // existe uno activo de ese estudio, no se crea otro (409 con
+        // el folio existente para retomarlo). Los terminales no
+        // cuentan: repetir un estudio ya atendido es válido.
+        if (estudioId != null) {
+            exigirSinDuplicadoActivo(pacienteId, estudioId, null);
+        }
         String canal = canalOrigen == null || canalOrigen.isBlank() ? "WEB" : canalOrigen;
         Tramite tramite = new Tramite(generarFolio(), paciente, estudioId, canal);
         tramite = tramites.save(tramite);
         eventos.registrar(tramite.getId(), TipoEvento.TRAMITE_INICIADO, canal, "PACIENTE",
                 json(Map.of("folio", tramite.getFolio(), "estudioId", String.valueOf(estudioId))));
         return tramite;
+    }
+
+    /**
+     * Trámite activo de un paciente para un estudio (si existe): un
+     * paciente solo puede tener UN trámite activo por estudio. Los
+     * terminales (ATENDIDO, NO_PRESENTADO, NO_REALIZADO) no cuentan:
+     * repetir un estudio ya cerrado es historial legítimo, no un
+     * duplicado. `exceptoTramiteId` excluye al propio trámite que se
+     * está cotizando (el flujo Web crea el trámite con el estudio y
+     * luego lo cotiza con el mismo estudio).
+     */
+    @Transactional(readOnly = true)
+    public Optional<Tramite> buscarActivoPorEstudio(UUID pacienteId, Long estudioId, UUID exceptoTramiteId) {
+        if (pacienteId == null || estudioId == null) return Optional.empty();
+        return tramites.findByPacienteIdAndEstadoNotInOrderByCreatedAtDesc(pacienteId, ESTADOS_TERMINALES).stream()
+                .filter(t -> estudioId.equals(t.getEstudioId()))
+                .filter(t -> exceptoTramiteId == null || !t.getId().equals(exceptoTramiteId))
+                .findFirst();
+    }
+
+    /** Qué le falta a un trámite activo para completarse: clínica / fecha / hora. */
+    public static List<String> faltantes(Tramite tramite) {
+        List<String> f = new ArrayList<>();
+        if (tramite.getClinicaId() == null) f.add("clinica");
+        if (tramite.getFechaCita() == null) {
+            f.add("fecha");
+            f.add("hora");
+        }
+        return f;
+    }
+
+    /**
+     * Si ya existe un trámite activo de ese estudio para el paciente,
+     * no se crea otro: 409 con el folio existente y lo que le falta
+     * (clínica / fecha / hora), en JSON, para que el cliente ofrezca
+     * retomarlo en vez de duplicarlo. El front lo lee con
+     * parsearTramiteExistente (api.ts) y el bot lo pre-chequea con
+     * buscarActivoPorEstudio antes de cotizar.
+     */
+    private void exigirSinDuplicadoActivo(UUID pacienteId, Long estudioId, UUID exceptoTramiteId) {
+        Optional<Tramite> existente = buscarActivoPorEstudio(pacienteId, estudioId, exceptoTramiteId);
+        if (existente.isEmpty()) return;
+        Tramite t = existente.get();
+        String estudioNombre = estudios.findById(estudioId).map(Estudio::getNombre).orElse("ese estudio");
+        Map<String, Object> cuerpo = new LinkedHashMap<>();
+        cuerpo.put("tramiteExistente", Boolean.TRUE);
+        cuerpo.put("tramiteId", t.getId().toString());
+        cuerpo.put("folio", t.getFolio());
+        cuerpo.put("estado", t.getEstado().name());
+        cuerpo.put("estudio", estudioNombre);
+        cuerpo.put("faltantes", String.join(",", faltantes(t)));
+        cuerpo.put("mensaje", "Ya tienes un trámite activo de " + estudioNombre + " (folio " + t.getFolio()
+                + ", " + t.getEstado().name() + "). ¿Quieres retomarlo?");
+        throw new ResponseStatusException(HttpStatus.CONFLICT, jsonObjeto(cuerpo));
     }
 
     /**
@@ -118,6 +179,11 @@ public class TramiteService {
         exigirEstado(tramite, EstadoTramite.INICIADO, EstadoTramite.DATOS_PENDIENTES);
         Estudio estudio = estudios.findById(estudioId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Estudio no encontrado: " + estudioId));
+        // El trámite que se cotiza queda fuera de la búsqueda: el
+        // flujo Web crea el trámite con el estudio y luego lo cotiza
+        // con el mismo estudio. Otro trámite activo del mismo estudio
+        // sí es duplicado: 409 con el folio existente para retomarlo.
+        exigirSinDuplicadoActivo(tramite.getPaciente().getId(), estudioId, tramiteId);
         tramite.setEstudioId(estudio.getId());
         tramite.setPrecioCotizado(estudio.getPrecio());
         tramite.setEstado(EstadoTramite.COTIZADO);
@@ -165,7 +231,8 @@ public class TramiteService {
      * [fechaHora, fechaHora + duracionMin del estudio de su trámite);
      * un slot está ocupado si se solapa con alguna cita CONFIRMADA de
      * esa clínica ese día. Duraciones reales del catálogo:
-     * Ultrasonido 30, Perfil tiroideo 15, Radiografía 20, Análisis 10.
+     * Ultrasonido 30, Perfil tiroideo 15, Radiografía 20, Análisis 10,
+     * Electrocardiograma 20, Mastografía 30.
      */
     public static final LocalTime APERTURA = LocalTime.of(7, 0);
     public static final LocalTime CIERRE = LocalTime.of(17, 0);
@@ -755,6 +822,15 @@ public class TramiteService {
     }
 
     private String json(Map<String, String> mapa) {
+        try {
+            return objectMapper.writeValueAsString(mapa);
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "No se pudo serializar el payload a JSON");
+        }
+    }
+
+    /** Como json(), pero admite valores no String (p. ej. el boolean de tramiteExistente en el 409 de duplicado). */
+    private String jsonObjeto(Map<String, Object> mapa) {
         try {
             return objectMapper.writeValueAsString(mapa);
         } catch (JsonProcessingException e) {

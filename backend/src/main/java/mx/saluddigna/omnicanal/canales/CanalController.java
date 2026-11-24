@@ -1255,10 +1255,53 @@ public class CanalController {
                 true, opciones, tramite);
     }
 
+    /**
+     * Retomar en vez de duplicar: si el paciente ya tiene un trámite
+     * ACTIVO de ese estudio, se responde para seguir con ese folio
+     * (con lo que le falta: clínica / fecha / hora) en vez de crear
+     * otro. La respuesta lleva el trámite existente, así que el front
+     * lo toma como folio en contexto y los mensajes siguientes ya van
+     * sobre él. Si el usuario dice "sí", la afirmación continúa con
+     * ese folio (COTIZADO → elegir clínica; CLINICA_SELECCIONADA →
+     * pedir fecha). Vacío si no hay duplicado: se sigue el flujo
+     * normal (cotizar / crear). Los terminales no cuentan: un estudio
+     * ya atendido o cerrado sí se puede volver a cotizar.
+     */
+    private Optional<ResultadoBot> respuestaRetomarSiDuplicado(Paciente paciente, Estudio estudio, UUID exceptoTramiteId) {
+        Optional<Tramite> existente = tramites.buscarActivoPorEstudio(paciente.getId(), estudio.getId(), exceptoTramiteId);
+        if (existente.isEmpty()) return Optional.empty();
+        Tramite t = existente.get();
+        String nombre = paciente.getNombre().split(" ")[0];
+        List<String> faltantes = TramiteService.faltantes(t);
+        String faltaTexto = faltantes.isEmpty()
+                ? "tu cita ya está confirmada"
+                : "te falta: " + textoFaltantes(faltantes);
+        List<String> opciones = new ArrayList<>(opcionesPara(t));
+        opciones.add("Ver mis folios");
+        String texto = "Ya tienes un trámite activo de " + estudio.getNombre() + " (folio " + t.getFolio()
+                + ", " + t.getEstado().name() + "), " + nombre + ". ¿Quieres retomarlo? Seguimos con ese folio: "
+                + faltaTexto + ".";
+        return Optional.of(new ResultadoBot(texto, true, opciones, t));
+    }
+
+    /** Texto humano de lo que le falta a un trámite ("elegir clínica", "elegir fecha y hora"). */
+    private static String textoFaltantes(List<String> faltantes) {
+        List<String> partes = new ArrayList<>();
+        if (faltantes.contains("clinica")) partes.add("elegir clínica");
+        if (faltantes.contains("fecha") || faltantes.contains("hora")) partes.add("elegir fecha y hora");
+        return String.join(" y ", partes);
+    }
+
     private Optional<ResultadoBot> procesarInicio(Paciente paciente, Tramite tramite, String norm) {
         String nombre = paciente.getNombre().split(" ")[0];
         Optional<Estudio> estudio = elegirEstudio(norm);
         if (estudio.isPresent()) {
+            // Retomar en vez de duplicar: si ya hay un trámite activo
+            // de ese estudio, se sigue con ese folio (no se cotiza
+            // otro). El trámite que se está cotizando queda fuera de
+            // la búsqueda: es el mismo folio, no un duplicado.
+            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio.get(), tramite.getId());
+            if (retomar.isPresent()) return retomar;
             Tramite actualizado = tramites.cotizar(tramite.getId(), estudio.get().getId());
             return Optional.of(new ResultadoBot("Hola " + nombre + ", tu trámite " + actualizado.getFolio()
                     + " ya está cotizado: " + estudio.get().getNombre()
@@ -1292,6 +1335,11 @@ public class CanalController {
         String nombre = paciente.getNombre().split(" ")[0];
         Optional<Estudio> estudio = elegirEstudio(norm);
         if (estudio.isPresent()) {
+            // El trámite en contexto ya se cerró, pero puede haber
+            // OTRO trámite activo del mismo estudio: entonces se
+            // retoma ese en vez de crear uno nuevo.
+            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio.get(), null);
+            if (retomar.isPresent()) return retomar;
             Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.get().getId(), "WHATSAPP");
             nuevo = tramites.cotizar(nuevo.getId(), estudio.get().getId());
             return Optional.of(new ResultadoBot("Tu trámite " + tramite.getFolio() + " ya fue atendido. Te creé uno nuevo: "
@@ -1311,6 +1359,11 @@ public class CanalController {
         String nombre = paciente.getNombre().split(" ")[0];
         Optional<Estudio> estudio = elegirEstudio(norm);
         if (estudio.isPresent()) {
+            // Como en procesarAtendido: el folio en contexto está
+            // cerrado, pero puede haber OTRO trámite activo del mismo
+            // estudio y ese se retoma en vez de crear uno nuevo.
+            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio.get(), null);
+            if (retomar.isPresent()) return retomar;
             Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.get().getId(), "WHATSAPP");
             nuevo = tramites.cotizar(nuevo.getId(), estudio.get().getId());
             return Optional.of(new ResultadoBot("Tu trámite " + tramite.getFolio() + " ya se cerró ("
@@ -1335,7 +1388,7 @@ public class CanalController {
             case CLINICA_SELECCIONADA -> sb.append("Ya tienes clínica en tu trámite ").append(tramite.getFolio())
                     .append(". Puedo confirmar tu cita: dime el día en formato DD/MM/AAAA, o dime \"hoy\" o \"mañana\", "
                             + "y te muestro las horas libres de ese día para que elijas una.");
-            case INICIADO, DATOS_PENDIENTES -> sb.append("Puedo cotizarte un estudio: dime cuál necesitas (ultrasonido, perfil tiroideo, radiografía o análisis de sangre).");
+            case INICIADO, DATOS_PENDIENTES -> sb.append("Puedo cotizarte un estudio: dime cuál necesitas (ultrasonido, perfil tiroideo, radiografía, análisis de sangre, electrocardiograma o mastografía).");
             case CONFIRMADO -> sb.append("Tu cita ya está confirmada. Puedo decirte cuándo y dónde es.");
             case ATENDIDO -> sb.append("Tu trámite ya fue atendido. Puedo cotizarte otro estudio.");
             case NO_PRESENTADO -> sb.append("Tu trámite ").append(tramite.getFolio())
@@ -1632,6 +1685,8 @@ public class CanalController {
             if ((norm.contains("tsh") || norm.contains("t3") || norm.contains("t4")) && n.contains("tiroideo")) return Optional.of(e);
             if (norm.contains("radiografia") && n.contains("radiografia")) return Optional.of(e);
             if ((norm.contains("analisis") || norm.contains("sangre") || norm.contains("biometria")) && n.contains("analisis")) return Optional.of(e);
+            if ((norm.contains("electrocardiograma") || norm.contains("electro") || norm.contains("ecg") || norm.contains("corazon")) && n.contains("electrocardiograma")) return Optional.of(e);
+            if ((norm.contains("mastografia") || norm.contains("mama") || norm.contains("seno")) && n.contains("mastografia")) return Optional.of(e);
         }
         return Optional.empty();
     }

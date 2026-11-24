@@ -46,6 +46,12 @@ export const MOCK_ESTUDIOS: Estudio[] = [
   { id: 'est-002', nombre: 'Perfil tiroideo', precio: 620, descripcion: 'Perfil tiroideo en sangre' },
   { id: 'est-003', nombre: 'Radiografía tórax', precio: 450, descripcion: 'Radiografía de tórax PA y lateral' },
   { id: 'est-004', nombre: 'Análisis sangre', precio: 380, descripcion: 'Análisis de sangre general' },
+  // Los ids 5 y 6 son los numéricos reales del backend (V10): el
+  // mock solo se usa para rellenar nombre/precio cuando el backend
+  // no devuelve el estudio anidado, así que el ORDEN debe coincidir
+  // con los ids de la BD (ver normalizeTramite en api.ts).
+  { id: '5', nombre: 'Electrocardiograma', precio: 450, descripcion: 'Electrocardiograma de 12 derivaciones' },
+  { id: '6', nombre: 'Mastografía', precio: 950, descripcion: 'Mastografía bilateral' },
 ];
 
 export const MOCK_CLINICAS: Clinica[] = [

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { buscarPacientePorCurp, confirmar, cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorPacienteId, isApiError, seleccionarClinica } from '../api';
+import { buscarPacientePorCurp, confirmar, cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramite, getTramitesPorPacienteId, isApiError, parsearTramiteExistente, seleccionarClinica, textoFaltantes } from '../api';
 import { esCurp, normalizarCurp, validarCurp } from '../curp';
 import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import type { Clinica, Estudio, Paciente, Tramite } from '../types';
@@ -150,7 +150,9 @@ export default function WebPage() {
       // Sin red no hay lista previa: la recuperación lo intentará igual.
     }
     try {
-      // Cada Cotizar crea un folio NUEVO: un folio por estudio elegido.
+      // Cada Cotizar crea un folio NUEVO solo si el paciente no tiene
+      // ya un trámite ACTIVO de ese estudio: si lo tiene, el backend
+      // devuelve 409 con el folio existente para retomarlo (ver catch).
       const creado = await crearTramite({
         nombre: nombreEfectivo,
         telefono: telefonoEfectivo,
@@ -170,7 +172,34 @@ export default function WebPage() {
       window.sessionStorage.setItem(FOLIO_KEY, cotizado.folio);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
       await recargarFolios();
-    } catch {
+    } catch (err) {
+      // Retomar en vez de duplicar: el paciente ya tiene un trámite
+      // ACTIVO de ese estudio (409 con el folio existente y lo que le
+      // falta). Se carga ese folio y se continúa con solo los pasos
+      // que le faltan, sin crear uno nuevo. Va ANTES de la
+      // recuperación de falso negativo: ese folio ya existía antes
+      // del intento, no es uno que se creó con este clic.
+      const existente = parsearTramiteExistente(err);
+      if (existente) {
+        try {
+          const t = await getTramite(existente.tramiteId);
+          setTramite(t);
+          // Reservación retomada: la clínica, la fecha y la hora se
+          // eligen de cero (no arrastrar las de la anterior).
+          setClinicaId('');
+          fijarFechaISO('');
+          setHora('');
+          window.sessionStorage.setItem(FOLIO_KEY, t.folio);
+          setMensaje(
+            `${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa abajo con ese folio, sin crear uno nuevo.`,
+          );
+          await recargarFolios();
+          return;
+        } catch {
+          setMensaje(existente.mensaje);
+          return;
+        }
+      }
       // Falso negativo: con el backend frío la respuesta de crear o de
       // cotizar puede tardar y el cliente aborta, pero el servidor
       // igual guarda el folio. Antes de decir que no se creó nada, se

@@ -80,7 +80,9 @@ public class DataSeeder implements CommandLineRunner {
                     new Estudio("Ultrasonido abdominal", "Ultrasonido de abdomen completo", new BigDecimal("850.00"), 30),
                     new Estudio("Perfil tiroideo", "Perfil tiroideo en sangre (TSH, T3, T4)", new BigDecimal("620.00"), 15),
                     new Estudio("Radiografia torax", "Radiografia de torax PA y lateral", new BigDecimal("450.00"), 20),
-                    new Estudio("Analisis sangre", "Biometria hematica completa", new BigDecimal("380.00"), 10)));
+                    new Estudio("Analisis sangre", "Biometria hematica completa", new BigDecimal("380.00"), 10),
+                    new Estudio("Electrocardiograma", "Electrocardiograma de 12 derivaciones", new BigDecimal("450.00"), 20),
+                    new Estudio("Mastografía", "Mastografía bilateral", new BigDecimal("950.00"), 30)));
         }
         if (clinicas.count() == 0) {
             clinicas.saveAll(List.of(
