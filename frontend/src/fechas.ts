@@ -32,12 +32,21 @@ export function formatearFechaHora(iso: string | null | undefined): string {
   return `${fechaLatina} ${hora.slice(0, 5)}`;
 }
 
-const FECHA_LATINA_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+/** Fecha de mañana en DD/MM/AAAA (para el botón rápido de WhatsApp: nunca una fecha fija). */
+export function fechaMananaLatina(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
 
 /** ¿Es una fecha real en DD/MM/AAAA? Día 1-31, mes 1-12, año 1900-2100, 29/02 solo en bisiesto. */
 export function esFechaLatinaValida(texto: string): boolean {
   return parsearFechaLatina(texto) !== null;
 }
+
+const FECHA_LATINA_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
 /**
  * "24/11/2026" -> "2026-11-24" (ISO, para enviar a la API).

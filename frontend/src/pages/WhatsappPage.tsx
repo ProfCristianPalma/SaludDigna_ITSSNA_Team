@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getPerfilYo, getToken, getTramitesPorTelefono, enviarWhatsapp, normalizarTelefono } from '../api';
+import { fechaMananaLatina } from '../fechas';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -7,6 +8,8 @@ interface MensajeChat {
   id: number;
   de: 'yo' | 'bot';
   texto: string;
+  /** Solo en mensajes del bot: false cuando el bot respondió "No entendí". */
+  entendido?: boolean;
 }
 
 const WA_TELEFONO_KEY = 'saluddigna-wa-telefono';
@@ -25,6 +28,11 @@ export default function WhatsappPage() {
   const [tramites, setTramites] = useState<Tramite[]>([]);
   const [enviando, setEnviando] = useState(false);
   const [sesionLista, setSesionLista] = useState(false);
+  // Folio en contexto: se manda con CADA mensaje para que el bot no
+  // tenga que adivinar con cuál de tus folios seguir.
+  const [folioActivo, setFolioActivo] = useState<string | null>(null);
+  // Respuestas sugeridas que devuelve el bot para el estado actual.
+  const [opciones, setOpciones] = useState<string[]>([]);
   const finRef = useRef<HTMLDivElement>(null);
   const folioAutoEnviado = useRef(false);
 
@@ -77,10 +85,14 @@ export default function WhatsappPage() {
     setTexto('');
     setEnviando(true);
     try {
-      const res = await enviarWhatsapp(telefono, limpio);
-      if (res.tramite) setTramite(res.tramite);
+      const res = await enviarWhatsapp(telefono, limpio, folioActivo ?? undefined);
+      if (res.tramite) {
+        setTramite(res.tramite);
+        setFolioActivo(res.tramite.folio);
+      }
       setTramites(res.tramites ?? []);
-      setMensajes((prev) => [...prev, { id: idBase + 1, de: 'bot', texto: res.respuesta }]);
+      setOpciones(res.opciones ?? []);
+      setMensajes((prev) => [...prev, { id: idBase + 1, de: 'bot', texto: res.respuesta, entendido: res.entendido }]);
     } catch {
       setMensajes((prev) => [
         ...prev,
@@ -129,6 +141,11 @@ export default function WhatsappPage() {
           {mensajes.map((m) => (
             <div key={m.id} className={m.de === 'yo' ? 'bubble bubble-yo' : 'bubble bubble-bot'}>
               {m.texto}
+              {m.de === 'bot' && m.entendido === false && (
+                <div className="muted" style={{ marginTop: 6, fontSize: '0.85em' }}>
+                  ⚠ El bot no entendió ese mensaje.
+                </div>
+              )}
             </div>
           ))}
           <div ref={finRef} />
@@ -152,28 +169,29 @@ export default function WhatsappPage() {
           </button>
         </form>
 
-        {/* Respuestas rápidas: la demo no depende de que el bot adivine
-            texto libre. Cada botón manda el texto exacto que el backend
-            y el mock saben interpretar. */}
+        {/* Respuestas rápidas: las sugiere el bot para el estado actual
+            (campo `opciones` de la respuesta) y cada botón manda ese
+            texto exacto CON el folio en contexto. Sin opciones del bot,
+            solo "Ayuda" (o la fecha de mañana si falta confirmar la cita).
+            Nada hardcodeado: la fecha de mañana se calcula en el front. */}
         <div className="wa-quick" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
-          {(!tramite || tramite.estado === 'COTIZADO') && (
-            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, 'Sí, quiero elegir clínica')}>
-              Sí, elegir clínica
+          {opciones.length > 0 ? (
+            opciones.map((op) => (
+              <button key={op} type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, op)}>
+                {op}
+              </button>
+            ))
+          ) : tramite?.estado === 'CLINICA_SELECCIONADA' ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={(e) => handleEnviar(e, fechaMananaLatina())}
+            >
+              Confirmar {fechaMananaLatina()}
             </button>
-          )}
-          {tramite?.estado === 'COTIZADO' && (
-            <>
-              <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '1')}>
-                1 · Puebla Centro
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '2')}>
-                2 · Tehuacán
-              </button>
-            </>
-          )}
-          {tramite?.estado === 'CLINICA_SELECCIONADA' && (
-            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, '24/11/2026')}>
-              Confirmar 24/11/2026
+          ) : (
+            <button type="button" className="btn btn-secondary" onClick={(e) => handleEnviar(e, 'Ayuda')}>
+              Ayuda
             </button>
           )}
         </div>
@@ -201,7 +219,14 @@ export default function WhatsappPage() {
                 <span>
                   <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
                 </span>
-                <button type="button" className="btn btn-small" onClick={(e) => handleEnviar(e, t.folio)}>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={(e) => {
+                    setFolioActivo(t.folio);
+                    handleEnviar(e, t.folio);
+                  }}
+                >
                   Seguir con este folio
                 </button>
               </li>

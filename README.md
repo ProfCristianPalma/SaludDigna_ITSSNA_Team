@@ -306,13 +306,29 @@ leen y escriben sobre los mismos trámites.
   (`GET /api/pacientes/buscar?nombre=Ana` y luego sus trámites). El
   Journey acepta folio, teléfono o UUID: con teléfono muestra la lista de
   folios para elegir uno.
-- **WhatsApp con varios folios:** si el paciente tiene varios trámites
-  activos y no dice cuál, el bot **no elige uno al azar**: lista sus folios
-  con estudio y estado y pide el folio (ej. `SD-2026-0002`) o `folio 1`,
-  `folio 2`. Si el mensaje ya trae el folio, usa ese trámite (y verifica
-  que sea de ese teléfono). Solo crea un trámite nuevo cuando el paciente
-  no tiene ningún trámite activo. Un número suelto (`1`, `2`) no elige
-  folio, porque en un trámite COTIZADO `1` significa "clínica 1".
+- **WhatsApp es un chatbot con contexto:** el front manda el folio en
+  contexto con cada mensaje (campo `folio`), así que "1" o "25/11/2026"
+  se aplican al trámite que se venía siguiendo. El orden para elegir
+  trámite es: folio explícito en el texto o en contexto, "folio N" /
+  "opción N", la intención por estado (elegir clínica → el COTIZADO;
+  una fecha → el CLINICA_SELECCIONADA; un estudio → el INICIADO),
+  un solo folio activo, y solo si de verdad no se puede saber, lista
+  los folios y pregunta (nunca elige al azar). El bot entiende por
+  estado: en COTIZADO elige clínica con "1", "uno", "primera",
+  "Puebla", "Tehuacán" o el nombre de la clínica; en
+  CLINICA_SELECCIONADA confirma con una fecha DD/MM/AAAA, "hoy",
+  "mañana" o "pasado mañana" (fecha pasada o imposible → lo dice y
+  vuelve a pedir), y "cambiar clínica" vuelve a COTIZADO; en
+  INICIADO pide el estudio por nombre o palabra clave; en CONFIRMADO
+  dice cuándo y dónde es la cita (cambiar fecha y cancelar no están
+  disponibles por WhatsApp: remite al Call Center); en ATENDIDO ofrece
+  cotizar otro estudio. "Ayuda" y "hola" listan lo que puede hacer EN
+  ESE ESTADO. Si no entiende, responde "No entendí ..." con el estado
+  del folio y las opciones válidas, sin inventar avances. Cada
+  respuesta trae `opciones` (botones) y `entendido`. Un "hola" NUNCA
+  crea un trámite: solo se crea cuando el usuario pide un estudio
+  concreto. Un teléfono no registrado se registra en el mismo chat
+  con nombre completo + fecha de nacimiento (DD/MM/AAAA).
 - **Clínica:** la recepción lista los trámites CONFIRMADOS desde la BD
   (`GET /api/tramites?estado=CONFIRMADO`). El check-in queda en el log de
   eventos y "Registrar atención" llama a `POST /api/tramites/{id}/atender`

@@ -100,6 +100,23 @@ public class TramiteService {
         return tramite;
     }
 
+    /**
+     * Vuelve un tramite de CLINICA_SELECCIONADA a COTIZADO para cambiar
+     * de clinica (lo pide el bot de WhatsApp con "cambiar clinica" /
+     * "otra clinica"). Se limpia la clinica elegida y el tramite queda
+     * listo para elegir otra, sin crear un folio nuevo.
+     */
+    public Tramite volverACotizado(UUID tramiteId) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEstado(tramite, EstadoTramite.CLINICA_SELECCIONADA);
+        tramite.setClinicaId(null);
+        tramite.setEstado(EstadoTramite.COTIZADO);
+        tramite = tramites.save(tramite);
+        eventos.registrar(tramite.getId(), TipoEvento.CLINICA_SELECCIONADA, tramite.getCanalOrigen(), "PACIENTE",
+                json(Map.of("accion", "cambiar_clinica")));
+        return tramite;
+    }
+
     public Tramite confirmar(UUID tramiteId, LocalDateTime fechaCita) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.CLINICA_SELECCIONADA);

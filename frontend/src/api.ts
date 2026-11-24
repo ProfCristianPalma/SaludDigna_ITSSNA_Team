@@ -586,16 +586,26 @@ export async function confirmar(tramiteId: string, fechaCita: string): Promise<T
 export async function enviarWhatsapp(
   telefono: string,
   mensaje: string,
-): Promise<{ respuesta: string; tramite: Tramite | null; tramites?: Tramite[] }> {
+  /** Folio en contexto: el trámite que el usuario venía siguiendo. El backend lo prefiere para no adivinar entre varios folios. */
+  folio?: string,
+): Promise<{
+  respuesta: string;
+  tramite: Tramite | null;
+  tramites?: Tramite[];
+  /** Respuestas sugeridas por el bot para el estado actual (botones). */
+  opciones?: string[];
+  /** Si el bot entendió la intención (false = respondió "No entendí"). */
+  entendido?: boolean;
+}> {
   const tel = normalizarTelefono(telefono);
   // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
-  // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso } y,
+  // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso, opciones, entendido } y,
   // si el paciente tiene varios folios activos y no dijo cual, { tramites }.
   // Sin fallback mock: si el backend no responde, el error se propaga y
   // la página avisa que el mensaje no se envió ni se guardó.
   const raw = await fetchJson<Record<string, unknown>>('/canales/whatsapp/mensaje', {
     method: 'POST',
-    body: JSON.stringify({ telefono: tel, mensaje }),
+    body: JSON.stringify({ telefono: tel, mensaje, ...(folio ? { folio } : {}) }),
   });
   const tramiteRaw = raw.tramite as Record<string, unknown> | null | undefined;
   const tramitesRaw = raw.tramites as Record<string, unknown>[] | undefined;
@@ -603,6 +613,8 @@ export async function enviarWhatsapp(
     respuesta: String(raw.mensaje ?? raw.respuesta ?? ''),
     tramite: tramiteRaw ? normalizeTramite(tramiteRaw) : null,
     tramites: tramitesRaw ? tramitesRaw.map(normalizeTramite) : undefined,
+    opciones: Array.isArray(raw.opciones) ? (raw.opciones as string[]) : undefined,
+    entendido: typeof raw.entendido === 'boolean' ? raw.entendido : undefined,
   };
 }
 
