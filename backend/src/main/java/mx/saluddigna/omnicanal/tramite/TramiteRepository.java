@@ -11,7 +11,11 @@ public interface TramiteRepository extends JpaRepository<Tramite, UUID> {
 
     List<Tramite> findByPacienteIdOrderByCreatedAtDesc(UUID pacienteId);
 
-    Optional<Tramite> findFirstByPacienteIdAndEstadoNotOrderByCreatedAtDesc(UUID pacienteId, EstadoTramite estado);
+    List<Tramite> findByPacienteIdAndEstadoNotOrderByCreatedAtDesc(UUID pacienteId, EstadoTramite estado);
+
+    Optional<Tramite> findByFolio(String folio);
+
+    List<Tramite> findByEstado(EstadoTramite estado);
 
     boolean existsByFolio(String folio);
 }

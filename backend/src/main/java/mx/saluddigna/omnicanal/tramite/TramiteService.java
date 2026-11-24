@@ -187,6 +187,33 @@ public class TramiteService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tramite no encontrado: " + tramiteId));
     }
 
+    /** Busca un tramite por su folio legible (SD-2026-XXXX). 404 si no existe. */
+    @Transactional(readOnly = true)
+    public Tramite buscarPorFolio(String folio) {
+        return tramites.findByFolio(folio)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tramite no encontrado con folio " + folio));
+    }
+
+    /** Todos los tramites en un estado dado, para la recepcion de clinica y tableros. */
+    @Transactional(readOnly = true)
+    public List<Tramite> listarPorEstado(EstadoTramite estado) {
+        return tramites.findByEstado(estado);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Tramite> listarTodos() {
+        return tramites.findAll();
+    }
+
+    /**
+     * Tramites activos (no atendidos) de un paciente, del mas reciente al mas viejo.
+     * Un paciente puede tener varios folios activos a la vez, uno por estudio.
+     */
+    @Transactional(readOnly = true)
+    public List<Tramite> listarActivosDe(UUID pacienteId) {
+        return tramites.findByPacienteIdAndEstadoNotOrderByCreatedAtDesc(pacienteId, EstadoTramite.ATENDIDO);
+    }
+
     @Transactional(readOnly = true)
     public List<Tramite> listarPorTelefono(String telefono) {
         Paciente paciente = pacientes.findByTelefono(telefono)
@@ -197,7 +224,7 @@ public class TramiteService {
 
     @Transactional(readOnly = true)
     public Optional<Tramite> tramiteActivoDe(UUID pacienteId) {
-        return tramites.findFirstByPacienteIdAndEstadoNotOrderByCreatedAtDesc(pacienteId, EstadoTramite.ATENDIDO);
+        return listarActivosDe(pacienteId).stream().findFirst();
     }
 
     /** Vista journey: tramite + paciente + estudio + clinica + timeline + siguiente paso. */

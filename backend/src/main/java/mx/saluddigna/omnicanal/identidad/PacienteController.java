@@ -2,6 +2,7 @@ package mx.saluddigna.omnicanal.identidad;
 
 import jakarta.validation.Valid;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -35,7 +36,7 @@ public class PacienteController {
      * GET /api/pacientes?telefono=... [&fechaNacimiento=yyyy-MM-dd]
      * Con fecha de nacimiento verifica identidad; sin ella solo resuelve por telefono.
      */
-    @GetMapping
+    @GetMapping(params = "telefono")
     public Paciente buscarPorTelefono(
             @RequestParam String telefono,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaNacimiento) {
@@ -47,6 +48,18 @@ public class PacienteController {
         return service.buscarPorTelefono(telefono)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Paciente no encontrado con telefono " + telefono));
+    }
+
+    /** GET /api/pacientes/buscar?nombre=Ana → pacientes cuyo nombre contiene el texto. */
+    @GetMapping("/buscar")
+    public List<Paciente> buscarPorNombre(@RequestParam String nombre) {
+        return service.buscarPorNombre(nombre);
+    }
+
+    /** GET /api/pacientes → todos los pacientes (lista para el asesor). */
+    @GetMapping
+    public List<Paciente> listarTodos() {
+        return service.listarTodos();
     }
 
     @GetMapping("/{id}")

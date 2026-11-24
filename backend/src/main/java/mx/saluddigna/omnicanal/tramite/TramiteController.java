@@ -60,9 +60,28 @@ public class TramiteController {
         return service.buscar(id);
     }
 
+    /** Trámite por folio legible, ej. SD-2026-0001 (el {id} de arriba solo acepta UUID). */
+    @GetMapping("/tramites/folio/{folio}")
+    public Tramite buscarPorFolio(@PathVariable String folio) {
+        return service.buscarPorFolio(folio);
+    }
+
+    /**
+     * GET /api/tramites?telefono=... → trámites de ese paciente (como antes).
+     * GET /api/tramites?estado=CONFIRMADO → trámites en ese estado (recepción de clínica).
+     * GET /api/tramites (sin params) → todos.
+     */
     @GetMapping("/tramites")
-    public List<Tramite> listarPorTelefono(@RequestParam String telefono) {
-        return service.listarPorTelefono(telefono);
+    public List<Tramite> listar(
+            @RequestParam(required = false) String telefono,
+            @RequestParam(required = false) mx.saluddigna.omnicanal.tramite.domain.EstadoTramite estado) {
+        if (estado != null) {
+            return service.listarPorEstado(estado);
+        }
+        if (telefono != null && !telefono.isBlank()) {
+            return service.listarPorTelefono(telefono);
+        }
+        return service.listarTodos();
     }
 
     /** Registro manual de un evento sobre un tramite (append-only, no cambia el estado por si solo). */
@@ -91,6 +110,12 @@ public class TramiteController {
         return service.confirmar(id, req.fechaCita());
     }
 
+    /** Clínica: marca la atención como concluida (CONFIRMADO → ATENDIDO) y actualiza la cita. */
+    @PostMapping("/tramites/{id}/atender")
+    public Tramite atender(@PathVariable UUID id) {
+        return service.concluirAtencion(id);
+    }
+
     @PostMapping("/tramites/{id}/completar-dato")
     public Tramite completarDato(@PathVariable UUID id, @RequestBody CompletarDatoRequest req) {
         return service.completarDatoPendiente(id, req.clave(), req.valor());
@@ -105,5 +130,11 @@ public class TramiteController {
     @GetMapping("/journey/{tramiteId}")
     public Map<String, Object> journey(@PathVariable UUID tramiteId) {
         return service.obtenerJourney(tramiteId);
+    }
+
+    /** Journey por folio legible, ej. SD-2026-0001. */
+    @GetMapping("/journey/folio/{folio}")
+    public Map<String, Object> journeyPorFolio(@PathVariable String folio) {
+        return service.obtenerJourney(service.buscarPorFolio(folio).getId());
     }
 }

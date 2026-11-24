@@ -9,7 +9,7 @@ una sola conversación, con trazabilidad completa.
 
 ## Arquitectura en 10 líneas
 
-1. Modular monolith Spring Boot 3.3 + Java 21 + React 18 + Vite + PostgreSQL 16.
+1. Modular monolith Spring Boot 3.3 + Java 21 + React 18 + Vite + PostgreSQL 15.
 2. Módulos por contexto acotado: Identidad, Trámite, Eventos, Catálogo, Canales.
 3. Columna vertebral: event log append-only (`eventos`: id, tramite_id, tipo,
    canal, actor, payload, timestamp). Todo cambio de estado es un evento.
@@ -87,6 +87,53 @@ Si ya tenías la base creada, basta con `docker compose down -v` y volver
 a levantar para que Flyway aplique V3, o simplemente reinicia el backend:
 `DataSeeder` crea los pacientes/trámites que falten en cada arranque.
 
+## Varios folios por paciente
+
+Un paciente puede tener **varios trámites activos a la vez, uno por cada
+estudio que elija**. Cada folio (`SD-2026-XXXX`) tiene su propio estudio,
+precio, clínica, cita y estado, y todo vive en Postgres: nada se guarda
+solo en el navegador. Web, WhatsApp, Call Center, App, Clínica y Journey
+leen y escriben sobre los mismos trámites.
+
+- **Cómo se crean:** en la Web, cada Cotizar crea un **folio nuevo** (un
+  folio por estudio). Si Ana cotiza Ultrasonido y luego Perfil tiroideo,
+  tiene 2 folios distintos. La Web muestra la lista "Mis folios" con todos
+  los de ese teléfono.
+- **Cómo se busca:** por **teléfono** (`GET /api/tramites?telefono=`),
+  por **folio** (`GET /api/tramites/folio/SD-2026-0001`) o por **nombre**
+  (`GET /api/pacientes/buscar?nombre=Ana` y luego sus trámites). El
+  Journey acepta folio, teléfono o UUID: con teléfono muestra la lista de
+  folios para elegir uno.
+- **WhatsApp con varios folios:** si el paciente tiene varios trámites
+  activos y no dice cuál, el bot **no elige uno al azar**: lista sus folios
+  con estudio y estado y pide el folio (ej. `SD-2026-0002`) o `folio 1`,
+  `folio 2`. Si el mensaje ya trae el folio, usa ese trámite (y verifica
+  que sea de ese teléfono). Solo crea un trámite nuevo cuando el paciente
+  no tiene ningún trámite activo. Un número suelto (`1`, `2`) no elige
+  folio, porque en un trámite COTIZADO `1` significa "clínica 1".
+- **Clínica:** la recepción lista los trámites CONFIRMADOS desde la BD
+  (`GET /api/tramites?estado=CONFIRMADO`). El check-in queda en el log de
+  eventos y "Registrar atención" llama a `POST /api/tramites/{id}/atender`
+  (CONFIRMADO → ATENDIDO); el atendido desaparece de la lista al recargar.
+- **Asesor:** busca por teléfono, folio o nombre, ve la lista de folios
+  del paciente y elige uno. "Completar dato" guarda en la BD
+  (`POST /tramites/{id}/completar-dato`) y "Guardar nota" queda en el log
+  (`POST /canales/call-center/nota`); ambas recargan el trámite/timeline.
+- **Modo demo sin backend:** el mock solo se usa cuando el backend **no
+  responde** (error de red). Si el backend responde 404 (folio o teléfono
+  inexistente), la página muestra "no encontrado" en vez de inventar a Ana.
+
+### Probar 2 folios de un mismo usuario
+
+1. En la Web, como Ana (+52 222 000 0001), cotiza Ultrasonido → folio nuevo.
+2. Con el mismo teléfono, cotiza Perfil tiroideo → **otro folio nuevo**.
+3. En "Mis folios" deben aparecer los 2, cada uno con su estudio y precio.
+4. En WhatsApp escribe "hola": el bot lista los 2 folios; responde
+   `SD-2026-0002` (o el folio que toque) y continúa solo con ese.
+5. En el asesor busca `Ana` o su teléfono: ve los 2 folios y elige uno.
+6. En Clínica, tras confirmar una cita, atiende ese folio: solo ese pasa
+   a ATENDIDO; el otro sigue en su estado.
+
 ## Si ves "Modo demo sin backend"
 
 Ese banner sale cuando el front no llega a `http://localhost:8080/api`.
@@ -137,16 +184,22 @@ datos mock locales: la demo nunca se cae en vivo.
 | POST | `/api/auth/login` | Login demo por rol, devuelve JWT |
 | POST | `/api/pacientes` | Registrar paciente |
 | GET | `/api/pacientes?telefono=` | Resolver identidad por teléfono (+fechaNacimiento) |
+| GET | `/api/pacientes/buscar?nombre=` | Pacientes por nombre (contiene, sin mayúsculas) |
+| GET | `/api/pacientes` | Lista de todos los pacientes |
 | POST | `/api/tramites` | Crear trámite |
-| GET | `/api/tramites/{id}` | Trámite + estado actual |
+| GET | `/api/tramites/{id}` | Trámite + estado actual (UUID) |
+| GET | `/api/tramites/folio/{folio}` | Trámite por folio (ej. SD-2026-0001) |
 | GET | `/api/tramites?telefono=` | Trámites de un paciente |
+| GET | `/api/tramites?estado=` | Trámites en un estado (ej. CONFIRMADO) |
 | POST | `/api/tramites/{id}/cotizar` | Cotizar estudio |
 | POST | `/api/tramites/{id}/seleccionar-clinica` | Elegir clínica |
 | POST | `/api/tramites/{id}/confirmar` | Confirmar cita |
+| POST | `/api/tramites/{id}/atender` | Registrar atención (CONFIRMADO → ATENDIDO) |
 | POST | `/api/tramites/{id}/completar-dato` | Completar dato pendiente |
 | POST | `/api/tramites/{id}/eventos` | Registrar evento (append-only) |
 | GET | `/api/tramites/{id}/timeline` | Línea de tiempo del trámite |
 | GET | `/api/journey/{tramiteId}` | Patient Journey (estado + timeline + siguiente paso) |
+| GET | `/api/journey/folio/{folio}` | Patient Journey por folio |
 | GET | `/api/estudios`, `/api/clinicas` | Catálogo |
 | POST | `/api/canales/whatsapp/mensaje` | WhatsApp simulado (resuelve identidad y recupera trámite) |
 | POST | `/api/canales/call-center/nota` | Nota del asesor |
@@ -163,7 +216,7 @@ SaludDigna_ITSSNA_Team/
 ├── backend/    Spring Boot 3.3, Java 21, Maven (ver backend/README.md)
 ├── frontend/   React 18 + Vite + TypeScript (ver frontend/README.md)
 ├── docs/arquitectura.md   Diagramas Mermaid
-├── docker-compose.yml     postgres:16 + backend + frontend
+├── docker-compose.yml     postgres:15 + backend + frontend
 └── Reto Software Inteligente - SALUD DIGNA.pdf
 ```
 

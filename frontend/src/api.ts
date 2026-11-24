@@ -1,4 +1,4 @@
-import { MOCK_CLINICAS, MOCK_ESTUDIOS, MOCK_PACIENTE_ANA, mockTimeline, mockTramite, mockTramiteParaTelefono } from './mock';
+import { MOCK_CLINICAS, MOCK_ESTUDIOS, MOCK_PACIENTE_ANA, MOCK_PACIENTES, mockTimeline, mockTramite, mockTramiteParaTelefono } from './mock';
 import type { Clinica, Estudio, Evento, Journey, Paciente, Tramite } from './types';
 
 export const API_BASE = 'http://localhost:8080/api';
@@ -8,6 +8,28 @@ export let isMock = false;
 
 export function isMockMode(): boolean {
   return isMock;
+}
+
+/**
+ * Error con respuesta del backend (HTTP 4xx/5xx): el backend SI respondio,
+ * asi que NO es un fallo de red y NO debe usarse el mock. Un error sin
+ * status (TypeError de fetch, AbortError por timeout) es el backend caido.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message?: string) {
+    super(message ?? `HTTP ${status}`);
+    this.status = status;
+  }
+}
+
+export function isApiError(err: unknown): err is ApiError {
+  return err instanceof ApiError;
+}
+
+/** El backend no respondio (red caida, timeout, backend apagado): ahi si vale el mock. */
+export function isNetworkError(err: unknown): boolean {
+  return !isApiError(err);
 }
 
 /** ¿El backend está vivo? Usa /api/health, sin marcar mock si falla. */
@@ -39,12 +61,34 @@ async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs = 4000):
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status} en ${path}`);
     markLive();
     return (await res.json()) as T;
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+// --- Resolucion de identificadores ---------------------------------------
+// Un tramite se puede pedir por UUID (id interno), por folio SD-2026-XXXX
+// o por telefono (devuelve el tramite activo mas reciente de ese paciente).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FOLIO_RE = /^SD-\d{4}-\d{4}$/i;
+
+export function esFolio(q: string): boolean {
+  return FOLIO_RE.test(q.trim());
+}
+
+export function esTelefono(q: string): boolean {
+  const digitos = q.replace(/\D/g, '');
+  return digitos.length >= 7 && !UUID_RE.test(q.trim()) && !FOLIO_RE.test(q.trim());
+}
+
+/** Mock del tramite con ese folio (solo para cuando el backend no responde). */
+function mockPorFolio(folio: string): Tramite | null {
+  const n = parseInt(folio.slice(-4), 10);
+  if (Number.isNaN(n) || n < 1 || n > MOCK_PACIENTES.length) return null;
+  return mockTramiteParaTelefono(MOCK_PACIENTES[n - 1].telefono);
 }
 
 // --- Normalización backend -> frontend ---------------------------------
@@ -215,40 +259,179 @@ export async function getClinicas(): Promise<Clinica[]> {
   }
 }
 
-export async function getTramite(id: string): Promise<Tramite> {
+/** Trámite por folio legible (GET /api/tramites/folio/{folio}). */
+export async function getTramitePorFolio(folio: string): Promise<Tramite> {
   try {
-    const raw = await fetchJson<Record<string, unknown>>(`/tramites/${encodeURIComponent(id)}`);
+    const raw = await fetchJson<Record<string, unknown>>(`/tramites/folio/${encodeURIComponent(folio.trim())}`);
     return normalizeTramite(raw);
-  } catch {
+  } catch (err) {
+    if (isApiError(err)) throw err; // 404 real de la BD: no hay que inventar a Ana.
     markMock();
-    const t = mockTramite();
-    if (id && id.startsWith('SD-') && id !== t.folio) t.folio = id;
+    const t = mockPorFolio(folio);
+    if (!t) throw err;
     return t;
   }
+}
+
+/** TODOS los trámites (folios) de un paciente por teléfono, del más reciente al más viejo. */
+export async function getTramitesPorTelefono(telefono: string): Promise<Tramite[]> {
+  try {
+    const list = await fetchJson<Record<string, unknown>[]>(
+      `/tramites?telefono=${encodeURIComponent(telefono.trim())}`,
+    );
+    return list.map(normalizeTramite);
+  } catch (err) {
+    if (isApiError(err)) return []; // Paciente no existe en la BD: lista vacia, no mock.
+    markMock();
+    const t = mockTramiteParaTelefono(telefono);
+    return t ? [t] : [];
+  }
+}
+
+/** Trámites en un estado dado (ej. CONFIRMADO, para la recepción de clínica). */
+export async function getTramitesPorEstado(estado: string): Promise<Tramite[]> {
+  try {
+    const list = await fetchJson<Record<string, unknown>[]>(
+      `/tramites?estado=${encodeURIComponent(estado)}`,
+    );
+    return list.map(normalizeTramite);
+  } catch (err) {
+    if (isApiError(err)) throw err;
+    markMock();
+    // Sin backend: los 5 usuarios ejemplo en ese estado, como en la BD.
+    return MOCK_PACIENTES.map((p) => mockTramiteParaTelefono(p.telefono)).filter(
+      (t): t is Tramite => t !== null && t.estado === estado,
+    );
+  }
+}
+
+/** Paciente por teléfono (GET /api/pacientes?telefono=). */
+export async function getPacientePorTelefono(telefono: string): Promise<Paciente> {
+  try {
+    return await fetchJson<Paciente>(`/pacientes?telefono=${encodeURIComponent(telefono.trim())}`);
+  } catch (err) {
+    if (isApiError(err)) throw err;
+    markMock();
+    const t = mockTramiteParaTelefono(telefono);
+    if (!t?.paciente) throw err;
+    return t.paciente;
+  }
+}
+
+/** Pacientes cuyo nombre contiene el texto (GET /api/pacientes/buscar?nombre=). */
+export async function buscarPacientesPorNombre(nombre: string): Promise<Paciente[]> {
+  try {
+    return await fetchJson<Paciente[]>(`/pacientes/buscar?nombre=${encodeURIComponent(nombre.trim())}`);
+  } catch (err) {
+    if (isApiError(err)) return [];
+    markMock();
+    const norm = normalizarTexto(nombre);
+    return MOCK_PACIENTES.filter((p) => normalizarTexto(p.nombre).includes(norm));
+  }
+}
+
+/** Todos los pacientes (GET /api/pacientes, para el asesor). */
+export async function getPacientes(): Promise<Paciente[]> {
+  try {
+    return await fetchJson<Paciente[]>('/pacientes');
+  } catch (err) {
+    if (isApiError(err)) throw err;
+    markMock();
+    return MOCK_PACIENTES;
+  }
+}
+
+export async function getTramite(id: string): Promise<Tramite> {
+  const q = id.trim();
+  if (UUID_RE.test(q)) {
+    try {
+      const raw = await fetchJson<Record<string, unknown>>(`/tramites/${encodeURIComponent(q)}`);
+      return normalizeTramite(raw);
+    } catch (err) {
+      if (isApiError(err)) throw err;
+      markMock();
+      return mockTramite();
+    }
+  }
+  if (esFolio(q)) return getTramitePorFolio(q);
+  // Telefono: el tramite activo mas reciente de ese paciente.
+  const lista = await getTramitesPorTelefono(q);
+  const activo = lista.find((t) => t.estado !== 'ATENDIDO') ?? lista[0];
+  if (!activo) throw new ApiError(404, `No hay tramites con el telefono ${q}`);
+  return activo;
 }
 
 export async function getTimeline(id: string): Promise<Evento[]> {
   try {
     return await fetchJson<Evento[]>(`/tramites/${encodeURIComponent(id)}/timeline`);
-  } catch {
+  } catch (err) {
+    if (isApiError(err)) throw err;
     markMock();
     return mockTimeline();
   }
 }
 
 export async function getJourney(id: string): Promise<Journey> {
+  const q = id.trim();
   try {
-    // Backend: GET /api/journey/{tramiteId} (no /tramites/.../journey)
-    const raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(id)}`);
+    let raw: Record<string, unknown>;
+    if (UUID_RE.test(q)) {
+      raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(q)}`);
+    } else if (esFolio(q)) {
+      raw = await fetchJson<Record<string, unknown>>(`/journey/folio/${encodeURIComponent(q)}`);
+    } else {
+      // Telefono: resolver a UUID antes de llamar al journey.
+      const tramite = await getTramite(q);
+      raw = await fetchJson<Record<string, unknown>>(`/journey/${encodeURIComponent(tramite.id)}`);
+    }
     const tramiteRaw = raw.tramite as Record<string, unknown> | undefined;
     return {
-      tramite: tramiteRaw ? normalizeTramite(tramiteRaw) : await getTramite(id),
+      tramite: tramiteRaw ? normalizeTramite(tramiteRaw) : await getTramite(q),
       timeline: (raw.timeline as Evento[]) ?? mockTimeline(),
     };
-  } catch {
+  } catch (err) {
+    if (isApiError(err)) throw err; // 404 real: "no encontrado", nunca a Ana.
     markMock();
-    return { tramite: await getTramite(id), timeline: mockTimeline() };
+    return { tramite: await getTramite(q), timeline: mockTimeline() };
   }
+}
+
+/** Marca la atencion como concluida: CONFIRMADO -> ATENDIDO en la BD. */
+export async function atenderTramite(tramiteId: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(`/tramites/${encodeURIComponent(tramiteId)}/atender`, {
+    method: 'POST',
+  });
+  return normalizeTramite(raw);
+}
+
+/** Completa un dato pendiente en la BD (POST /tramites/{id}/completar-dato). */
+export async function completarDato(tramiteId: string, clave: string, valor: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/completar-dato`,
+    { method: 'POST', body: JSON.stringify({ clave, valor }) },
+  );
+  return normalizeTramite(raw);
+}
+
+/** Nota del asesor: queda en el log de eventos (POST /canales/call-center/nota). */
+export async function guardarNotaCallCenter(tramiteId: string, nota: string): Promise<void> {
+  await fetchJson<Record<string, unknown>>('/canales/call-center/nota', {
+    method: 'POST',
+    body: JSON.stringify({ tramiteId, nota }),
+  });
+}
+
+/** Check-in en clinica: registra un evento en la BD (POST /tramites/{id}/eventos). */
+export async function registrarEventoCheckIn(tramiteId: string): Promise<Evento> {
+  return fetchJson<Evento>(`/tramites/${encodeURIComponent(tramiteId)}/eventos`, {
+    method: 'POST',
+    body: JSON.stringify({
+      tipo: 'canal.cambiado',
+      canal: 'CLINICA',
+      actor: 'CLINICA',
+      payload: JSON.stringify({ accion: 'check-in' }),
+    }),
+  });
 }
 
 export interface CrearTramiteInput {
@@ -269,16 +452,28 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
       paciente = await fetchJson<Paciente>(
         `/pacientes?telefono=${encodeURIComponent(input.telefono)}&fechaNacimiento=${encodeURIComponent(input.fechaNacimiento)}`,
       );
-    } catch {
-      paciente = await fetchJson<Paciente>('/pacientes', {
-        method: 'POST',
-        body: JSON.stringify({
-          nombre: input.nombre,
-          telefono: input.telefono,
-          email: '',
-          fechaNacimiento: input.fechaNacimiento,
-        }),
-      });
+    } catch (err) {
+      // Si el telefono ya existe pero la fecha no coincidio, el POST daria 409:
+      // entonces se resuelve solo por telefono y se usa ese paciente.
+      try {
+        paciente = await fetchJson<Paciente>('/pacientes', {
+          method: 'POST',
+          body: JSON.stringify({
+            nombre: input.nombre,
+            telefono: input.telefono,
+            email: '',
+            fechaNacimiento: input.fechaNacimiento,
+          }),
+        });
+      } catch (err2) {
+        if (isApiError(err2) && err2.status === 409) {
+          paciente = await fetchJson<Paciente>(
+            `/pacientes?telefono=${encodeURIComponent(input.telefono)}`,
+          );
+        } else {
+          throw err2;
+        }
+      }
     }
     const raw = await fetchJson<Record<string, unknown>>('/tramites', {
       method: 'POST',
@@ -362,18 +557,21 @@ export async function confirmar(tramiteId: string, fechaCita: string): Promise<T
 export async function enviarWhatsapp(
   telefono: string,
   mensaje: string,
-): Promise<{ respuesta: string; tramite: Tramite | null }> {
+): Promise<{ respuesta: string; tramite: Tramite | null; tramites?: Tramite[] }> {
   try {
     // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
-    // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso }.
+    // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso } y,
+    // si el paciente tiene varios folios activos y no dijo cual, { tramites }.
     const raw = await fetchJson<Record<string, unknown>>('/canales/whatsapp/mensaje', {
       method: 'POST',
       body: JSON.stringify({ telefono, mensaje }),
     });
     const tramiteRaw = raw.tramite as Record<string, unknown> | null | undefined;
+    const tramitesRaw = raw.tramites as Record<string, unknown>[] | undefined;
     return {
       respuesta: String(raw.mensaje ?? raw.respuesta ?? ''),
       tramite: tramiteRaw ? normalizeTramite(tramiteRaw) : null,
+      tramites: tramitesRaw ? tramitesRaw.map(normalizeTramite) : undefined,
     };
   } catch {
     markMock();

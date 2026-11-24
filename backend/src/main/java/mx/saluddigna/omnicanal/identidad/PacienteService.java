@@ -1,6 +1,7 @@
 package mx.saluddigna.omnicanal.identidad;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
@@ -44,6 +45,20 @@ public class PacienteService {
     @Transactional(readOnly = true)
     public Optional<Paciente> buscarPorTelefono(String telefono) {
         return repository.findByTelefono(telefono);
+    }
+
+    /** Pacientes cuyo nombre contiene el texto (sin importar mayusculas). */
+    @Transactional(readOnly = true)
+    public List<Paciente> buscarPorNombre(String nombre) {
+        if (nombre == null || nombre.isBlank()) {
+            return List.of();
+        }
+        return repository.findByNombreContainingIgnoreCase(nombre.trim());
+    }
+
+    @Transactional(readOnly = true)
+    public List<Paciente> listarTodos() {
+        return repository.findAll();
     }
 
     @Transactional(readOnly = true)

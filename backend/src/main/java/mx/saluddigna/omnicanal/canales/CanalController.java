@@ -70,6 +70,16 @@ public class CanalController {
 
     private static final Pattern FECHA_ISO = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
 
+    private static final Pattern FOLIO_PATTERN = Pattern.compile("SD-\\d{4}-\\d{4}", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Seleccion de un folio de la lista por su numero ("folio 2", "opcion 1",
+     * "numero 3", "el 2"). Un numero suelto ("1", "2") NO se usa para esto:
+     * en un tramite COTIZADO "1" significa "clinica 1", asi que seria ambiguo.
+     */
+    private static final Pattern SELECCION_PATTERN =
+            Pattern.compile("(?:folio|opci[oó]n|n[uú]mero|el|la)\\s*(\\d{1,2})", Pattern.CASE_INSENSITIVE);
+
     @PostMapping("/whatsapp/mensaje")
     public Map<String, Object> mensajeWhatsapp(@RequestBody MensajeWhatsappRequest req) {
         Optional<Paciente> pacienteOpt = pacientes.buscarPorTelefono(req.telefono());
@@ -85,14 +95,48 @@ public class CanalController {
             return respuesta;
         }
         Paciente paciente = pacienteOpt.get();
-        Optional<Tramite> activo = tramites.tramiteActivoDe(paciente.getId());
+        // Un paciente puede tener varios folios activos, uno por estudio.
+        List<Tramite> activos = tramites.listarActivosDe(paciente.getId());
+
         Tramite tramite;
         boolean creado = false;
-        if (activo.isEmpty()) {
-            tramite = tramites.crearTramite(paciente.getId(), null, "WHATSAPP");
-            creado = true;
+        Matcher folioMatcher = FOLIO_PATTERN.matcher(req.mensaje() == null ? "" : req.mensaje());
+        if (folioMatcher.find()) {
+            // El mensaje trae un folio explicito: se usa ese tramite, no otro.
+            String folio = folioMatcher.group().toUpperCase();
+            Tramite porFolio;
+            try {
+                porFolio = tramites.buscarPorFolio(folio);
+            } catch (ResponseStatusException e) {
+                return respuestaSinTramite("No encontre ningun tramite con el folio " + folio
+                        + ". Revisa el folio o dime tu estudio para empezar uno nuevo.");
+            }
+            if (!porFolio.getPaciente().getId().equals(paciente.getId())) {
+                return respuestaSinTramite("El folio " + folio + " no pertenece a este numero de telefono.");
+            }
+            tramite = porFolio;
         } else {
-            tramite = activo.get();
+            Optional<Tramite> seleccion = elegirDeLista(req.mensaje(), activos);
+            if (seleccion.isPresent()) {
+                tramite = seleccion.get();
+            } else if (activos.isEmpty()) {
+                tramite = tramites.crearTramite(paciente.getId(), null, "WHATSAPP");
+                creado = true;
+            } else if (activos.size() == 1) {
+                tramite = activos.get(0);
+            } else {
+                // Varios folios activos y el mensaje no dice cual: no se elige
+                // uno al azar, se listan y se pide el folio.
+                Map<String, Object> respuesta = new LinkedHashMap<>();
+                respuesta.put("tramite", null);
+                respuesta.put("estado", null);
+                respuesta.put("siguientePaso", "ELEGIR_FOLIO");
+                respuesta.put("tramites", activos);
+                String msg = listarFolios(paciente, activos);
+                respuesta.put("mensaje", msg);
+                respuesta.put("respuesta", msg);
+                return respuesta;
+            }
         }
         eventos.registrar(tramite.getId(), TipoEvento.CANAL_CAMBIADO, "WHATSAPP", "PACIENTE",
                 "{\"mensaje\":\"" + escapar(req.mensaje()) + "\",\"canalAnterior\":\"" + tramite.getCanalOrigen() + "\"}");
@@ -112,6 +156,47 @@ public class CanalController {
             respuesta.put("clinicas", clinicas.findAll());
         }
         return respuesta;
+    }
+
+    private Map<String, Object> respuestaSinTramite(String mensaje) {
+        Map<String, Object> respuesta = new LinkedHashMap<>();
+        respuesta.put("tramite", null);
+        respuesta.put("estado", null);
+        respuesta.put("siguientePaso", "ELEGIR_FOLIO");
+        respuesta.put("mensaje", mensaje);
+        respuesta.put("respuesta", mensaje);
+        return respuesta;
+    }
+
+    private Optional<Tramite> elegirDeLista(String mensaje, List<Tramite> activos) {
+        if (mensaje == null || activos.isEmpty()) return Optional.empty();
+        Matcher m = SELECCION_PATTERN.matcher(mensaje);
+        if (!m.find()) return Optional.empty();
+        int n;
+        try {
+            n = Integer.parseInt(m.group(1));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+        if (n < 1 || n > activos.size()) return Optional.empty();
+        return Optional.of(activos.get(n - 1));
+    }
+
+    private String listarFolios(Paciente paciente, List<Tramite> activos) {
+        String nombre = paciente.getNombre().split(" ")[0];
+        StringBuilder sb = new StringBuilder();
+        sb.append("Hola ").append(nombre).append(", tienes ").append(activos.size())
+                .append(" tramites activos. ¿Con cual seguimos?\n");
+        for (int i = 0; i < activos.size(); i++) {
+            Tramite t = activos.get(i);
+            String estudio = t.getEstudioId() == null ? "sin estudio aun"
+                    : estudios.findById(t.getEstudioId()).map(Estudio::getNombre).orElse("estudio");
+            sb.append(i + 1).append(") ").append(t.getFolio()).append(" — ").append(estudio)
+                    .append(" (").append(t.getEstado().name()).append(")\n");
+        }
+        sb.append("Responde con el folio (por ejemplo ").append(activos.get(0).getFolio())
+                .append(") o con 'folio 1', 'folio 2', etc.");
+        return sb.toString();
     }
 
     private String procesarIntencion(Paciente paciente, Tramite tramite, String mensajeCrudo) {

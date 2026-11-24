@@ -17,6 +17,7 @@ export default function WhatsappPage() {
     { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. ¿En qué te ayudo hoy? Si ya empezaste un trámite en la web, dime tu teléfono o tu folio y lo retomamos donde lo dejaste.' },
   ]);
   const [tramite, setTramite] = useState<Tramite | null>(null);
+  const [tramites, setTramites] = useState<Tramite[]>([]);
   const [enviando, setEnviando] = useState(false);
   const finRef = useRef<HTMLDivElement>(null);
 
@@ -35,6 +36,7 @@ export default function WhatsappPage() {
     try {
       const res = await enviarWhatsapp(telefono, limpio);
       if (res.tramite) setTramite(res.tramite);
+      setTramites(res.tramites ?? []);
       setMensajes((prev) => [...prev, { id: idBase + 1, de: 'bot', texto: res.respuesta }]);
     } catch {
       setMensajes((prev) => [
@@ -49,7 +51,7 @@ export default function WhatsappPage() {
   return (
     <div>
       <h1>WhatsApp — continúa tu trámite</h1>
-      <p className="muted">El bot reconoce tu trámite pendiente por teléfono y te ofrece continuar sin repetir datos.</p>
+      <p className="muted">El bot reconoce tus trámites por teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir.</p>
 
       <div className="wa-shell">
         <div className="wa-header">
@@ -125,6 +127,20 @@ export default function WhatsappPage() {
             {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
           </p>
           <p className="muted">Paciente: {tramite.paciente?.nombre ?? MOCK_PACIENTE_ANA.nombre}</p>
+        </section>
+      )}
+
+      {tramites.length > 0 && (
+        <section className="card" style={{ marginTop: 16 }}>
+          <h2>Tus folios activos</h2>
+          <ul>
+            {tramites.map((t) => (
+              <li key={t.id}>
+                <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
+              </li>
+            ))}
+          </ul>
+          <p className="muted">Escribe el folio con el que quieres seguir.</p>
         </section>
       )}
     </div>

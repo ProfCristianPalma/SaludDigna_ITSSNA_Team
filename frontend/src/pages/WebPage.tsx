@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { cotizar, crearTramite, getClinicas, getEstudios, seleccionarClinica } from '../api';
+import { cotizar, crearTramite, getClinicas, getEstudios, getTramitesPorTelefono, seleccionarClinica } from '../api';
 import { MOCK_PACIENTE_ANA } from '../mock';
 import type { Clinica, Estudio, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
@@ -15,9 +15,20 @@ export default function WebPage() {
   const [clinicas, setClinicas] = useState<Clinica[]>([]);
   const [estudioId, setEstudioId] = useState('');
   const [tramite, setTramite] = useState<Tramite | null>(null);
+  const [misFolios, setMisFolios] = useState<Tramite[]>([]);
   const [clinicaId, setClinicaId] = useState('');
   const [mensaje, setMensaje] = useState('');
   const [cargando, setCargando] = useState(false);
+
+  // Todos los folios de ese telefono, desde la BD: un folio por estudio.
+  async function cargarFolios(tel: string) {
+    if (!tel.trim()) return;
+    try {
+      setMisFolios(await getTramitesPorTelefono(tel));
+    } catch {
+      setMisFolios([]);
+    }
+  }
 
   useEffect(() => {
     getEstudios().then((list) => {
@@ -27,6 +38,7 @@ export default function WebPage() {
     getClinicas().then(setClinicas);
     const guardado = window.localStorage.getItem(FOLIO_KEY);
     if (guardado) setMensaje(`Tienes un trámite guardado: ${guardado}. Puedes retomarlo en WhatsApp o en Journey.`);
+    void cargarFolios(MOCK_PACIENTE_ANA.telefono);
   }, []);
 
   const estudioSeleccionado = estudios.find((e) => e.id === estudioId);
@@ -37,11 +49,13 @@ export default function WebPage() {
     setCargando(true);
     setMensaje('');
     try {
+      // Cada Cotizar crea un folio NUEVO: un folio por estudio elegido.
       const creado = await crearTramite({ nombre, telefono, fechaNacimiento, estudioId, canal: 'WEB' });
       const cotizado = await cotizar(creado.id, estudioId);
       setTramite(cotizado);
       window.localStorage.setItem(FOLIO_KEY, cotizado.folio);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
+      await cargarFolios(telefono);
     } catch {
       setMensaje('No se pudo cotizar. Inténtalo de nuevo.');
     } finally {
@@ -56,6 +70,7 @@ export default function WebPage() {
       const actualizado = await seleccionarClinica(tramite.id, clinicaId);
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
+      await cargarFolios(telefono);
     } catch {
       setMensaje('No se pudo seleccionar la clínica.');
     } finally {
@@ -156,6 +171,33 @@ export default function WebPage() {
       </div>
 
       {mensaje && <p className="notice" role="status">{mensaje}</p>}
+
+      <section className="card" style={{ marginTop: 16 }}>
+        <h2>Mis folios</h2>
+        <p className="muted">
+          Un folio por estudio que hayas elegido, todos guardados en la base de datos
+          con tu teléfono. Cada uno sigue su propio flujo: estudio, precio, clínica, cita y estado.
+        </p>
+        {misFolios.length === 0 ? (
+          <p className="muted">Aún no tienes folios con este teléfono. Cotiza un estudio y aparecerá aquí.</p>
+        ) : (
+          <ul>
+            {misFolios.map((t) => (
+              <li key={t.id} className="dato-row">
+                <span>
+                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado}{' '}
+                  <EstadoBadge estado={t.estado} />
+                  {t.clinica ? ` · ${t.clinica.nombre}` : ''}
+                  {t.fechaCita ? ` · Cita: ${t.fechaCita}` : ''}
+                </span>
+                <Link className="btn btn-small" to={`/journey/${encodeURIComponent(t.folio)}`}>
+                  Ver Journey
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
