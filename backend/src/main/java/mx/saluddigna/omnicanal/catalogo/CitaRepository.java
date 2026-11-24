@@ -1,5 +1,6 @@
 package mx.saluddigna.omnicanal.catalogo;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.catalogo.domain.Cita;
