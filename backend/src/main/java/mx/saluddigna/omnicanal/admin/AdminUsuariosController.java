@@ -37,6 +37,7 @@ public class AdminUsuariosController {
 
     public record CrearUsuarioRequest(
             String nombre,
+            String curp,
             String telefono,
             String email,
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaNacimiento,
@@ -45,6 +46,7 @@ public class AdminUsuariosController {
 
     public record ActualizarUsuarioRequest(
             String nombre,
+            String curp,
             String telefono,
             String email,
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaNacimiento,
@@ -57,23 +59,23 @@ public class AdminUsuariosController {
         return service.listar();
     }
 
-    /** POST /api/admin/usuarios → crea el usuario en la BD. 409 si el teléfono ya existe. */
+    /** POST /api/admin/usuarios → crea el usuario en la BD. CURP obligatoria; 409 si la CURP o el teléfono ya existen. */
     @PostMapping
     public ResponseEntity<UsuarioAdminDTO> crear(@RequestBody CrearUsuarioRequest req) {
         UsuarioAdminDTO creado = service.crear(
-                req.nombre(), req.telefono(), req.email(), req.fechaNacimiento(), req.password());
+                req.nombre(), req.curp(), req.telefono(), req.email(), req.fechaNacimiento(), req.password());
         return ResponseEntity.status(HttpStatus.CREATED).body(creado);
     }
 
     /**
-     * PUT /api/admin/usuarios/{id} → edita nombre/teléfono/email/fecha.
+     * PUT /api/admin/usuarios/{id} → edita nombre/CURP/teléfono/email/fecha.
      * La contraseña solo se cambia si se envía una nueva (mínimo 6).
-     * 409 si el teléfono choca con otro usuario.
+     * 409 si la CURP o el teléfono chocan con otro usuario.
      */
     @PutMapping("/{id}")
     public UsuarioAdminDTO actualizar(@PathVariable UUID id, @RequestBody ActualizarUsuarioRequest req) {
         return service.actualizar(
-                id, req.nombre(), req.telefono(), req.email(), req.fechaNacimiento(), req.password());
+                id, req.nombre(), req.curp(), req.telefono(), req.email(), req.fechaNacimiento(), req.password());
     }
 
     /**

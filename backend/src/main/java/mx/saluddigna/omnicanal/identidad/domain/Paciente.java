@@ -17,8 +17,10 @@ import java.util.UUID;
 
 /**
  * Paciente: identidad unica del paciente en todos los canales.
- * La clave de resolucion omnicanal es el telefono (UNIQUE): el mismo
+ * La clave de resolucion omnicanal es la CURP (UNIQUE, V7): el mismo
  * paciente que escribe por WhatsApp es el que llama al Call Center.
+ * El telefono es opcional desde V7 (nullable, ya no UNIQUE en BD;
+ * la unicidad la sigue imponiendo el servicio cuando hay telefono).
  */
 @Entity
 @Table(name = "pacientes")
@@ -32,8 +34,12 @@ public class Paciente {
     @Column(nullable = false)
     private String nombre;
 
-    @NotBlank
-    @Column(nullable = false, unique = true)
+    /** CURP normalizada (mayúsculas, sin espacios, 18 caracteres). NULL en pacientes viejos sin CURP. */
+    @Column(name = "curp", length = 18)
+    private String curp;
+
+    /** Opcional desde V7: un paciente puede registrarse solo con CURP. */
+    @Column
     private String telefono;
 
     @Email
@@ -83,6 +89,14 @@ public class Paciente {
 
     public void setNombre(String nombre) {
         this.nombre = nombre;
+    }
+
+    public String getCurp() {
+        return curp;
+    }
+
+    public void setCurp(String curp) {
+        this.curp = curp;
     }
 
     public String getTelefono() {

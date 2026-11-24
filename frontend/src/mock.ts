@@ -19,7 +19,7 @@ export const MOCK_PACIENTES: Paciente[] = [
 /** Trámite ejemplo por usuario, cada uno en un estado distinto. */
 export function mockTramiteParaTelefono(telefono: string): Tramite | null {
   const limpio = telefono.replace(/\D/g, '');
-  const idx = MOCK_PACIENTES.findIndex((p) => p.telefono.replace(/\D/g, '') === limpio);
+  const idx = MOCK_PACIENTES.findIndex((p) => (p.telefono ?? '').replace(/\D/g, '') === limpio);
   if (idx < 0) return null;
   const paciente = MOCK_PACIENTES[idx];
   const base: Tramite = {

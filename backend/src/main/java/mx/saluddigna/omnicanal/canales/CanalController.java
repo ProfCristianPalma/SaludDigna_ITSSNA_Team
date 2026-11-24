@@ -20,8 +20,10 @@ import mx.saluddigna.omnicanal.catalogo.domain.Clinica;
 import mx.saluddigna.omnicanal.catalogo.domain.Estudio;
 import mx.saluddigna.omnicanal.eventos.EventoService;
 import mx.saluddigna.omnicanal.eventos.domain.TipoEvento;
+import mx.saluddigna.omnicanal.identidad.CurpUtil;
 import mx.saluddigna.omnicanal.identidad.PacienteService;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
+import mx.saluddigna.omnicanal.seguridad.PasswordService;
 import mx.saluddigna.omnicanal.tramite.TramiteService;
 import mx.saluddigna.omnicanal.tramite.domain.EstadoTramite;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
@@ -52,8 +54,14 @@ import org.springframework.web.server.ResponseStatusException;
  *   nunca responde "No entendí" a un mensaje que ya seleccionó
  *   el folio (la selección se resuelve antes de la intención).
  * - Un "hola" o "ayuda" NO crea trámites: solo se crea uno cuando el
- *   usuario pide un estudio concreto. Un teléfono no registrado se
- *   registra con nombre + fecha de nacimiento en el mismo chat.
+ *   usuario pide un estudio concreto. Un identificador no registrado
+ *   (CURP o teléfono) se registra con nombre + CURP + fecha de
+ *   nacimiento + contraseña en el mismo chat; el teléfono es opcional
+ *   desde V7. Si la CURP ya existe, se sigue con ese paciente.
+ * - La identidad se resuelve por CURP o por teléfono: el campo
+ *   `telefono` del request acepta cualquiera de los dos (el front
+ *   manda ahí lo que el usuario teclee en "CURP o teléfono"), y si el
+ *   mensaje trae una CURP registrada, también se resuelve por ella.
  *
  * Fechas: el usuario escribe en formato latinoamericano DD/MM/AAAA
  * (se acepta tambien AAAA-MM-DD por compatibilidad) y las citas se
@@ -74,15 +82,17 @@ public class CanalController {
     private final EventoService eventos;
     private final ClinicaRepository clinicas;
     private final EstudioRepository estudios;
+    private final PasswordService passwords;
 
     public CanalController(PacienteService pacientes, TramiteService tramites,
                            EventoService eventos, ClinicaRepository clinicas,
-                           EstudioRepository estudios) {
+                           EstudioRepository estudios, PasswordService passwords) {
         this.pacientes = pacientes;
         this.tramites = tramites;
         this.eventos = eventos;
         this.clinicas = clinicas;
         this.estudios = estudios;
+        this.passwords = passwords;
     }
 
     /**
@@ -323,14 +333,24 @@ public class CanalController {
 
     @PostMapping("/whatsapp/mensaje")
     public Map<String, Object> mensajeWhatsapp(@RequestBody MensajeWhatsappRequest req) {
-        // El telefono se normaliza a 10 digitos (ver TelefonoUtil): un mismo
-        // paciente no debe duplicarse por escribir +52 en un canal y no en otro.
-        String telefono = mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(req.telefono());
+        // El identificador puede ser una CURP o un teléfono: el front
+        // manda en `telefono` lo que el usuario teclee en "CURP o
+        // teléfono". La CURP se detecta por su patrón (18 caracteres);
+        // el teléfono se normaliza a 10 dígitos (ver TelefonoUtil).
+        // Si el mensaje mismo trae una CURP registrada, también se
+        // resuelve por ella (el usuario la escribió en el chat).
+        String identificador = req.telefono() == null ? "" : req.telefono().trim();
         String texto = req.mensaje() == null ? "" : req.mensaje().trim();
         String norm = normalizar(texto);
-        Optional<Paciente> pacienteOpt = pacientes.buscarPorTelefono(telefono);
+        Optional<Paciente> pacienteOpt = resolverIdentidad(identificador);
         if (pacienteOpt.isEmpty()) {
-            return responderRegistro(telefono, texto, norm);
+            Optional<String> curpEnTexto = CurpUtil.buscarEnTexto(texto);
+            if (curpEnTexto.isPresent()) {
+                pacienteOpt = pacientes.buscarPorCurp(curpEnTexto.get());
+            }
+        }
+        if (pacienteOpt.isEmpty()) {
+            return responderRegistro(identificador, texto, norm);
         }
         Paciente paciente = pacienteOpt.get();
         // Un paciente puede tener varios folios activos, uno por estudio.
@@ -381,7 +401,7 @@ public class CanalController {
                         + ". Revisa el folio o dime tu estudio para empezar uno nuevo.", "ELEGIR_FOLIO", true, List.of());
             }
             if (!porFolio.getPaciente().getId().equals(paciente.getId())) {
-                return respuestaSinTramite("El folio " + folioPedido + " no pertenece a este número de teléfono.",
+                return respuestaSinTramite("El folio " + folioPedido + " no pertenece a tu cuenta (CURP o teléfono).",
                         "ELEGIR_FOLIO", true, List.of());
             }
             tramite = porFolio;
@@ -411,7 +431,7 @@ public class CanalController {
                             + ". Revisa el folio o dime tu estudio para empezar uno nuevo.", "ELEGIR_FOLIO", true, List.of());
                 }
                 if (!porContexto.getPaciente().getId().equals(paciente.getId())) {
-                    return respuestaSinTramite("El folio " + folioContexto + " no pertenece a este número de teléfono.",
+                    return respuestaSinTramite("El folio " + folioContexto + " no pertenece a tu cuenta (CURP o teléfono).",
                             "ELEGIR_FOLIO", true, List.of());
                 }
                 tramite = porContexto;
@@ -449,34 +469,90 @@ public class CanalController {
     }
 
     /**
-     * Teléfono no registrado: el bot guía el registro en el mismo chat.
-     * Si el mensaje trae nombre completo + fecha de nacimiento en
-     * DD/MM/AAAA, crea al paciente en la BD (PacienteService.registrar)
-     * y lo confirma; si falta algo, dice exactamente qué falta. Un
-     * saludo no pide datos a ciegas: explica cómo empezar.
+     * Resuelve la identidad por CURP (patrón de 18 caracteres) o por
+     * teléfono (normalizado a 10 dígitos). El teléfono es opcional
+     * desde V7: un identificador CURP nunca pasa por TelefonoUtil.
      */
-    private Map<String, Object> responderRegistro(String telefono, String texto, String norm) {
+    private Optional<Paciente> resolverIdentidad(String identificador) {
+        if (identificador == null || identificador.isBlank()) {
+            return Optional.empty();
+        }
+        String limpio = identificador.trim();
+        if (CurpUtil.esFormatoValido(limpio)) {
+            return pacientes.buscarPorCurp(limpio);
+        }
+        return pacientes.buscarPorTelefono(limpio);
+    }
+
+    /**
+     * Identificador (CURP o teléfono) no registrado: el bot guía el
+     * registro en el mismo chat. Pide nombre completo + CURP + fecha
+     * de nacimiento en DD/MM/AAAA + contraseña (mínimo 6 caracteres);
+     * el teléfono es opcional desde V7 (si el identificador era un
+     * teléfono, se guarda; si era una CURP, el paciente queda sin
+     * teléfono). Si el mensaje trae nombre + CURP + fecha + contraseña
+     * ("Ana García López GALA900514MDFRPN00 14/05/1990 contraseña
+     * ana123"), crea al paciente en la BD (PacienteService.registrar)
+     * y lo confirma; si falta algo, dice exactamente qué falta. Un
+     * saludo no pide datos a ciegas: explica cómo empezar. Si la CURP
+     * ya existe, se dice y se ofrece continuar con ese paciente.
+     */
+    private Map<String, Object> responderRegistro(String identificador, String texto, String norm) {
+        boolean identificadorEsCurp = CurpUtil.esFormatoValido(identificador);
+        // Teléfono del registro: el identificador si era teléfono; null si era CURP.
+        String telefono = identificadorEsCurp
+                ? null
+                : mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(identificador);
+        if (telefono != null && telefono.isBlank()) {
+            telefono = null;
+        }
         if (esSaludoOAyuda(norm)) {
-            return respuestaSinTramite("Hola, soy Salud Digna. No te tengo registrado con este número (" + telefono + "). "
-                    + "Para empezar, dime tu nombre completo y tu fecha de nacimiento en formato DD/MM/AAAA "
-                    + "(por ejemplo: Ana García López 14/05/1990), o crea tu cuenta en la Web.",
+            return respuestaSinTramite("Hola, soy Salud Digna. No te tengo registrado con este identificador ("
+                    + (identificador == null || identificador.isBlank() ? "sin identificador" : identificador) + "). "
+                    + "Para empezar, dime tu nombre completo, tu CURP, tu fecha de nacimiento en formato DD/MM/AAAA "
+                    + "y una contraseña de al menos 6 caracteres (por ejemplo: Ana García López GALA900514MDFRPN00 "
+                    + "14/05/1990 contraseña ana123). El teléfono es opcional: si me escribes desde tu número, "
+                    + "lo guardo para avisarte. Si ya tienes cuenta, escribe tu CURP en el campo de teléfono.",
                     "REGISTRAR_PACIENTE", true, List.of());
         }
+        String curp = identificadorEsCurp
+                ? CurpUtil.normalizar(identificador)
+                : CurpUtil.buscarEnTexto(texto).orElse(null);
         Matcher fechaMatcher = buscarFechaExplicita(texto);
         Optional<LocalDate> fechaOpt = extraerFechaExplicita(texto);
         if (fechaMatcher != null && fechaOpt.isEmpty()) {
             return respuestaSinTramite("Esa fecha no existe o no la pude leer. Escríbela en formato DD/MM/AAAA, "
-                    + "por ejemplo 14/05/1990, junto con tu nombre completo.",
+                    + "por ejemplo 14/05/1990, junto con tu nombre completo, tu CURP y tu contraseña.",
                     "REGISTRAR_PACIENTE", true, List.of());
         }
+        Optional<String> passwordOpt = extraerPassword(texto);
         String nombre = extraerNombreRegistro(texto, fechaMatcher);
         boolean nombreIncompleto = nombre.isBlank() || !nombre.contains(" ");
+        // Qué falta, todo junto: el bot no tiene memoria entre mensajes,
+        // así que el registro llega en un solo mensaje y se pide lo que falte.
+        List<String> faltantes = new ArrayList<>();
+        if (nombreIncompleto) {
+            faltantes.add("tu nombre completo (nombre y apellidos)");
+        }
+        if (curp == null) {
+            faltantes.add("tu CURP (18 caracteres, por ejemplo GALA900514MDFRPN00)");
+        }
         if (fechaOpt.isEmpty()) {
-            String falta = nombreIncompleto
-                    ? "Me falta tu nombre completo y tu fecha de nacimiento."
-                    : "Me falta tu fecha de nacimiento.";
-            return respuestaSinTramite(falta + " Escríbelos en un mensaje, por ejemplo: "
-                    + (nombreIncompleto ? "Ana García López" : nombre) + " 14/05/1990. La fecha va en formato DD/MM/AAAA.",
+            faltantes.add("tu fecha de nacimiento en formato DD/MM/AAAA");
+        }
+        if (passwordOpt.isEmpty() || passwordOpt.get().length() < 6) {
+            faltantes.add("una contraseña de al menos 6 caracteres (escribe \"contraseña\" seguida de tu contraseña)");
+        }
+        if (!faltantes.isEmpty()) {
+            String ejemplo = "Ana García López GALA900514MDFRPN00 14/05/1990 contraseña ana123";
+            return respuestaSinTramite("Me falta " + String.join(", ", faltantes) + ". Escríbelos en un mensaje, "
+                    + "por ejemplo: " + ejemplo + ".",
+                    "REGISTRAR_PACIENTE", true, List.of());
+        }
+        // La CURP sí vino: se valida formato, fecha real y entidad.
+        Optional<String> motivoCurp = CurpUtil.validar(curp);
+        if (motivoCurp.isPresent()) {
+            return respuestaSinTramite(motivoCurp.get() + " (" + curp + "). Revisa tu CURP y escríbela de nuevo.",
                     "REGISTRAR_PACIENTE", true, List.of());
         }
         LocalDate fecha = fechaOpt.get();
@@ -485,33 +561,60 @@ public class CanalController {
                     + "Revisa el día, el mes y el año.",
                     "REGISTRAR_PACIENTE", true, List.of());
         }
-        if (nombreIncompleto) {
-            return respuestaSinTramite("Me falta tu nombre completo (nombre y apellidos). Escríbelo junto con tu fecha de nacimiento, "
-                    + "por ejemplo: Ana García López " + fecha.format(FORMATO_LATINO) + ".",
+        LocalDate fechaCurp = CurpUtil.fechaDesdeCurp(curp);
+        if (fechaCurp != null && !fechaCurp.equals(fecha)) {
+            return respuestaSinTramite("Tu fecha de nacimiento (" + fecha.format(FORMATO_LATINO)
+                    + ") no coincide con la fecha de tu CURP (" + fechaCurp.format(FORMATO_LATINO) + "). "
+                    + "Revisa la CURP o la fecha.",
                     "REGISTRAR_PACIENTE", true, List.of());
         }
         Paciente nuevo;
         try {
-            nuevo = pacientes.registrar(new Paciente(nombre, telefono, null, fecha));
+            Paciente alta = new Paciente(nombre, telefono, null, fecha);
+            alta.setCurp(curp);
+            alta.setPasswordHash(passwords.hash(passwordOpt.get()));
+            nuevo = pacientes.registrar(alta);
         } catch (ResponseStatusException e) {
-            // Carrera: el teléfono se registró entre la búsqueda y el alta.
+            // Carrera: la CURP (o el teléfono) se registró entre la
+            // búsqueda y el alta. Si ya existe por CURP, se sigue con
+            // ese paciente en vez de dejarlo bloqueado.
             if (e.getStatusCode() == HttpStatus.CONFLICT) {
-                Optional<Paciente> existente = pacientes.buscarPorTelefono(telefono);
-                if (existente.isPresent()) {
-                    nuevo = existente.get();
-                } else {
-                    throw e;
+                Optional<Paciente> existente = pacientes.buscarPorCurp(curp);
+                if (existente.isEmpty() && telefono != null) {
+                    existente = pacientes.buscarPorTelefono(telefono);
                 }
-            } else {
+                if (existente.isPresent()) {
+                    Paciente p = existente.get();
+                    return respuestaSinTramite("Esa CURP ya está registrada a nombre de " + p.getNombre()
+                            + ". Escribe tu CURP en el campo de teléfono para continuar con tus trámites.",
+                            "REGISTRAR_PACIENTE", true, List.of());
+                }
                 throw e;
             }
+            throw e;
         }
         String primerNombre = nuevo.getNombre().split(" ")[0];
-        return respuestaSinTramite("Listo " + primerNombre + ", ya quedaste registrado con este número. ¿Qué estudio necesitas?\n"
-                + textoEstudios(), "ELEGIR_ESTUDIO", true, opcionesEstudios());
+        return respuestaSinTramite("Listo " + primerNombre + ", ya quedaste registrado con tu CURP " + nuevo.getCurp()
+                + (nuevo.getTelefono() == null ? "" : " y tu teléfono " + nuevo.getTelefono())
+                + ". ¿Qué estudio necesitas?\n" + textoEstudios(), "ELEGIR_ESTUDIO", true, opcionesEstudios());
     }
 
-    /** Quita la fecha del mensaje y deja el nombre; quita muletillas ("me llamo", "soy", "mi nombre es"). */
+    /** Contraseña en el mensaje: "contraseña ana123", "clave: x", "password=...". Vacío si no viene. */
+    private static Optional<String> extraerPassword(String texto) {
+        if (texto == null) {
+            return Optional.empty();
+        }
+        Matcher m = Pattern.compile("(?i)(?:contrase[ñn]a|clave|password)\\s*[:=]?\\s*(\\S+)").matcher(texto);
+        if (m.find()) {
+            return Optional.of(m.group(1));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Quita la fecha, la CURP y la contraseña del mensaje y deja el
+     * nombre; quita muletillas ("me llamo", "soy", "mi nombre es").
+     */
     private String extraerNombreRegistro(String texto, Matcher fechaMatcher) {
         String resto;
         if (fechaMatcher == null) {
@@ -519,6 +622,11 @@ public class CanalController {
         } else {
             resto = (texto.substring(0, fechaMatcher.start()) + " " + texto.substring(fechaMatcher.end())).trim();
         }
+        Optional<String> curpEnResto = CurpUtil.buscarEnTexto(resto);
+        if (curpEnResto.isPresent()) {
+            resto = resto.replaceAll("(?i)" + Pattern.quote(curpEnResto.get()), " ");
+        }
+        resto = resto.replaceAll("(?i)(contrase[ñn]a|clave|password)\\s*[:=]?\\s*\\S+", " ");
         resto = resto.replaceAll("(?i)^\\s*(me llamo|mi nombre es|yo soy|soy|nombre\\s*:?)\\s*", "").trim();
         resto = resto.replaceAll("[,;:.]+$", "").trim();
         return resto.replaceAll("\\s+", " ");

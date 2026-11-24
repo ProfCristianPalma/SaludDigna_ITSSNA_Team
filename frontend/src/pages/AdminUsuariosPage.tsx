@@ -13,11 +13,11 @@ import {
   getUsuariosAdmin,
   isApiError,
   normalizarFolio,
-  normalizarTelefono,
 } from '../api';
 import type { StaffAdmin, StaffAdminInput, UsuarioAdmin, UsuarioAdminInput } from '../api';
 import type { Tramite } from '../types';
 import { esFechaLatinaValida, formatearFecha, parsearFechaLatina } from '../fechas';
+import { normalizarCurp, validarCurp } from '../curp';
 import VistaPersonal from '../components/VistaPersonal';
 
 // Administración de usuarios: SOLO se entra escribiendo la URL
@@ -55,6 +55,7 @@ function ContenidoAdminUsuarios() {
 
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [nombre, setNombre] = useState('');
+  const [curp, setCurp] = useState('');
   const [telefono, setTelefono] = useState('');
   const [email, setEmail] = useState('');
   const [fechaNacimiento, setFechaNacimiento] = useState('');
@@ -166,7 +167,8 @@ function ContenidoAdminUsuarios() {
     } else {
       setEditandoId(p.id);
       setNombre(p.nombre);
-      setTelefono(p.telefono);
+      setCurp(p.curp ?? '');
+      setTelefono(p.telefono ?? '');
       setEmail('');
       setFechaNacimiento(p.fechaNacimiento ? formatearFecha(p.fechaNacimiento) : '');
       setPassword('');
@@ -178,6 +180,7 @@ function ContenidoAdminUsuarios() {
   function limpiarFormulario() {
     setEditandoId(null);
     setNombre('');
+    setCurp('');
     setTelefono('');
     setEmail('');
     setFechaNacimiento('');
@@ -192,7 +195,8 @@ function ContenidoAdminUsuarios() {
   function empezarEditar(u: UsuarioAdmin) {
     setEditandoId(u.id);
     setNombre(u.nombre);
-    setTelefono(u.telefono);
+    setCurp(u.curp ?? '');
+    setTelefono(u.telefono ?? '');
     setEmail(u.email ?? '');
     setFechaNacimiento(u.fechaNacimiento ? formatearFecha(u.fechaNacimiento) : '');
     setPassword('');
@@ -220,9 +224,20 @@ function ContenidoAdminUsuarios() {
       }
       fechaIso = parsearFechaLatina(fechaNacimiento) ?? undefined;
     }
+    // CURP: obligatoria al crear; al editar, si se escribe debe ser válida (su 409 se muestra tal cual).
+    const curpNormalizada = normalizarCurp(curp);
+    if (!editandoId || curpNormalizada) {
+      const v = validarCurp(curpNormalizada);
+      if (!v.valida) {
+        setError(`La CURP no es válida: ${v.motivo}`);
+        return;
+      }
+    }
     const input: UsuarioAdminInput = {
       nombre: nombre.trim(),
-      telefono: normalizarTelefono(telefono),
+      curp: curpNormalizada || undefined,
+      // Al editar, teléfono vacío = borrarlo; al crear, vacío = sin teléfono.
+      telefono: telefono.trim() ? telefono : editandoId ? '' : null,
       email: email.trim() || undefined,
       fechaNacimiento: fechaIso,
       password: password || undefined,
@@ -251,7 +266,7 @@ function ContenidoAdminUsuarios() {
 
   async function handleEliminar(u: UsuarioAdmin) {
     const confirmar = window.confirm(
-      `¿Borrar a ${u.nombre} (${u.telefono})?\n\n` +
+      `¿Borrar a ${u.nombre} (${u.telefono ?? 'Sin teléfono'})?\n\n` +
         `Se borrarán también sus ${u.cantidadFolios} folio(s), sus citas y sus eventos. ` +
         `Esto no se puede deshacer.`,
     );
@@ -358,7 +373,8 @@ function ContenidoAdminUsuarios() {
     ? usuarios.filter(
         (u) =>
           u.nombre.toLowerCase().includes(q) ||
-          u.telefono.replace(/\D/g, '').includes(q.replace(/\D/g, '')),
+          (u.curp ?? '').toLowerCase().includes(q) ||
+          (u.telefono ?? '').replace(/\D/g, '').includes(q.replace(/\D/g, '')),
       )
     : usuarios;
 
@@ -378,8 +394,8 @@ function ContenidoAdminUsuarios() {
         <input
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Buscar por nombre o teléfono"
-          aria-label="Buscar usuario"
+          placeholder="Buscar por nombre, CURP o teléfono"
+          aria-label="Buscar usuario por nombre, CURP o teléfono"
         />
         <button type="button" className="btn btn-secondary" onClick={() => void cargar()} disabled={cargando}>
           Actualizar
@@ -407,7 +423,7 @@ function ContenidoAdminUsuarios() {
         <section className="card" style={{ marginBottom: 16 }}>
           <h2>Trámite {tramiteFolio.folio}</h2>
           <dl className="kv">
-            <dt>Paciente</dt><dd>{tramiteFolio.paciente?.nombre ?? '—'} · {tramiteFolio.paciente?.telefono ?? '—'}</dd>
+            <dt>Paciente</dt><dd>{tramiteFolio.paciente?.nombre ?? '—'} · {tramiteFolio.paciente?.curp ?? tramiteFolio.paciente?.telefono ?? '—'}</dd>
             <dt>Estudio</dt><dd>{tramiteFolio.estudio.nombre}</dd>
             <dt>Estado</dt><dd>{tramiteFolio.estado}</dd>
             <dt>Fecha de cita</dt><dd>{tramiteFolio.fechaCita ? formatearFecha(tramiteFolio.fechaCita) : 'Sin confirmar'}</dd>
@@ -432,8 +448,19 @@ function ContenidoAdminUsuarios() {
             <input value={nombre} onChange={(e) => setNombre(e.target.value)} required />
           </label>
           <label>
-            Teléfono (10 dígitos, sin +52)
-            <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="2220000001" required />
+            CURP {editandoId ? '(opcional al editar)' : '(obligatoria)'}
+            <input
+              value={curp}
+              onChange={(e) => setCurp(normalizarCurp(e.target.value))}
+              placeholder="CURP (18 caracteres)"
+              maxLength={18}
+              style={{ textTransform: 'uppercase' }}
+              required={!editandoId}
+            />
+          </label>
+          <label>
+            Teléfono (10 dígitos, sin +52) — opcional; vacío al editar = borrarlo
+            <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="2220000001" />
           </label>
           <label>
             Correo electrónico
@@ -482,6 +509,7 @@ function ContenidoAdminUsuarios() {
             <thead>
               <tr>
                 <th style={{ textAlign: 'left' }}>Nombre</th>
+                <th style={{ textAlign: 'left' }}>CURP</th>
                 <th style={{ textAlign: 'left' }}>Teléfono</th>
                 <th style={{ textAlign: 'left' }}>Correo</th>
                 <th style={{ textAlign: 'left' }}>Nacimiento</th>
@@ -494,7 +522,8 @@ function ContenidoAdminUsuarios() {
               {visibles.map((u) => (
                 <tr key={u.id}>
                   <td>{u.nombre}</td>
-                  <td>{u.telefono}</td>
+                  <td>{u.curp ?? '—'}</td>
+                  <td>{u.telefono ?? 'Sin teléfono'}</td>
                   <td>{u.email ?? '—'}</td>
                   <td>{u.fechaNacimiento ? formatearFecha(u.fechaNacimiento) : '—'}</td>
                   <td>{u.cantidadFolios}</td>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getPerfilYo, getToken, logout } from '../api';
 import type { PerfilYo } from '../api';
+import RetomarTramite from '../components/RetomarTramite';
 
 // Página de inicio: solo presentación y acciones de sesión. Sin
 // tarjetas de canales y sin botón de cotizar: para cotizar está el
@@ -54,6 +55,7 @@ export default function BienvenidaPage() {
           </div>
         )}
       </section>
+      <RetomarTramite />
     </div>
   );
 }

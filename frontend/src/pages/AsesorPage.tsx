@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   actualizarPaciente,
+  buscarPacientePorCurp,
   buscarPacientesPorNombre,
   completarDato,
   confirmar,
@@ -15,6 +16,7 @@ import {
   getPacientePorTelefono,
   getTimeline,
   getTramitePorFolio,
+  getTramitesPorPacienteId,
   getTramitesPorTelefono,
   guardarNotaCallCenter,
   isApiError,
@@ -22,6 +24,7 @@ import {
   seleccionarClinica,
   verificarDisponibilidad,
 } from '../api';
+import { esCurp, normalizarCurp, validarCurp } from '../curp';
 import type { Clinica, Estudio, Evento, Paciente, Tramite } from '../types';
 import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import EstadoBadge from '../components/EstadoBadge';
@@ -52,6 +55,7 @@ function ContenidoAsesor() {
   // Editar datos del paciente del trámite en pantalla (PUT
   // /api/pacientes/{id}). Sin campo de contraseña: aquí no se toca.
   const [editNombre, setEditNombre] = useState('');
+  const [editCurp, setEditCurp] = useState('');
   const [editTelefono, setEditTelefono] = useState('');
   const [editFechaLatina, setEditFechaLatina] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -87,7 +91,8 @@ function ContenidoAsesor() {
   useEffect(() => {
     if (!tramite?.paciente) return;
     setEditNombre(tramite.paciente.nombre);
-    setEditTelefono(tramite.paciente.telefono);
+    setEditCurp(tramite.paciente.curp ?? '');
+    setEditTelefono(tramite.paciente.telefono ?? '');
     setEditFechaLatina(
       tramite.paciente.fechaNacimiento ? formatearFecha(tramite.paciente.fechaNacimiento) : '',
     );
@@ -147,6 +152,10 @@ function ContenidoAsesor() {
       let lista: Tramite[] = [];
       if (folioBuscado) {
         lista = [await getTramitePorFolio(folioBuscado)];
+      } else if (esCurp(q)) {
+        // CURP: se resuelve el paciente y luego todos sus folios por id.
+        const p = await buscarPacientePorCurp(q);
+        lista = await getTramitesPorPacienteId(p.id);
       } else if (esTelefono(q)) {
         lista = await getTramitesPorTelefono(q);
       } else {
@@ -154,7 +163,7 @@ function ContenidoAsesor() {
         const pacientes = await buscarPacientesPorNombre(q);
         if (pacientes.length === 0) throw new Error('sin pacientes');
         for (const p of pacientes) {
-          lista.push(...(await getTramitesPorTelefono(p.telefono)));
+          lista.push(...(await getTramitesPorPacienteId(p.id)));
         }
       }
       if (lista.length === 0) {
@@ -177,7 +186,7 @@ function ContenidoAsesor() {
           : folioBuscado && isApiError(err)
             ? `No se pudo buscar el folio ${folioBuscado} (HTTP ${err.status}: ${err.message}).`
             : isApiError(err)
-              ? 'No se encontró un trámite con ese teléfono, folio o nombre. Verifica la búsqueda.'
+              ? 'No se encontró un trámite con esa CURP, teléfono, folio o nombre. Verifica la búsqueda.'
               : 'El backend no respondió, no se pudo buscar. Revisa que el backend esté arriba.',
       );
     } finally {
@@ -222,6 +231,14 @@ function ContenidoAsesor() {
   async function handleEditarPaciente(e: React.FormEvent) {
     e.preventDefault();
     if (!tramite?.paciente) return;
+    const curpNormalizada = normalizarCurp(editCurp);
+    if (curpNormalizada) {
+      const v = validarCurp(curpNormalizada);
+      if (!v.valida) {
+        setMensaje(`La CURP no es válida: ${v.motivo}`);
+        return;
+      }
+    }
     if (editFechaLatina.trim() && !esFechaLatinaValida(editFechaLatina)) {
       setMensaje('La fecha de nacimiento no es válida. Escríbela como DD/MM/AAAA, por ejemplo 14/05/1990.');
       return;
@@ -230,12 +247,15 @@ function ContenidoAsesor() {
     try {
       // Solo se mandan los campos con valor: el backend conserva los
       // demás y registra el cambio en el log del trámite (tramiteId).
+      // Teléfono vacío = BORRAR el teléfono (contrato PUT). CURP con
+      // valor se valida y su 409 (duplicada) se muestra tal cual.
       // Sin contraseña: PUT /api/pacientes/{id} no la toca.
       const actualizado = await actualizarPaciente(
         tramite.paciente.id,
         {
           nombre: editNombre.trim() || undefined,
-          telefono: editTelefono.trim() || undefined,
+          curp: curpNormalizada || undefined,
+          telefono: editTelefono.trim() ? editTelefono.trim() : '',
           email: editEmail.trim() || undefined,
           fechaNacimiento: editFechaLatina.trim()
             ? (parsearFechaLatina(editFechaLatina) ?? undefined)
@@ -244,7 +264,7 @@ function ContenidoAsesor() {
         tramite.id,
       );
       setMensaje(
-        `Datos del paciente actualizados: ${actualizado.nombre} · ${actualizado.telefono}.`,
+        `Datos del paciente actualizados: ${actualizado.nombre} · ${actualizado.curp ?? actualizado.telefono ?? 'Sin teléfono'}.`,
       );
       setTramite((prev) => (prev ? { ...prev, paciente: actualizado } : prev));
       setTramites((prev) =>
@@ -263,19 +283,21 @@ function ContenidoAsesor() {
 
   async function handleBuscarPacienteReserva(e: React.FormEvent) {
     e.preventDefault();
-    const tel = resTelefono.trim();
-    if (!tel) return;
+    const q = resTelefono.trim();
+    if (!q) return;
     setResCargando(true);
     setResMensaje('');
     try {
-      const p = await getPacientePorTelefono(tel);
+      // Solo con la CURP basta: no se pide teléfono. Si es CURP se
+      // busca por CURP; si no, por teléfono como antes.
+      const p = esCurp(q) ? await buscarPacientePorCurp(q) : await getPacientePorTelefono(q);
       setResPaciente(p);
-      setResMensaje(`Paciente encontrado: ${p.nombre} · ${p.telefono}.`);
+      setResMensaje(`Paciente encontrado: ${p.nombre} · ${p.curp ?? p.telefono ?? 'Sin teléfono'}.`);
     } catch (err) {
       setResPaciente(null);
       setResMensaje(
         isApiError(err) && err.status === 404
-          ? `No hay ningún paciente con el teléfono ${tel}.`
+          ? `No hay ningún paciente con ${esCurp(q) ? 'la CURP' : 'el teléfono'} ${q}.`
           : isApiError(err)
             ? `No se pudo buscar al paciente (HTTP ${err.status}: ${err.message}).`
             : 'El backend no respondió, no se pudo buscar al paciente.',
@@ -288,7 +310,7 @@ function ContenidoAsesor() {
   function usarPacienteDelTramite() {
     if (!tramite?.paciente) return;
     setResPaciente(tramite.paciente);
-    setResTelefono(tramite.paciente.telefono);
+    setResTelefono(tramite.paciente.curp ?? tramite.paciente.telefono ?? '');
     setResMensaje(`Usando al paciente del trámite ${tramite.folio}: ${tramite.paciente.nombre}.`);
   }
 
@@ -300,6 +322,7 @@ function ContenidoAsesor() {
       const creado = await crearTramite({
         nombre: resPaciente.nombre,
         telefono: resPaciente.telefono,
+        pacienteId: resPaciente.id,
         estudioId: resEstudioId,
         canal: 'CALL_CENTER',
       });
@@ -373,14 +396,14 @@ function ContenidoAsesor() {
   return (
     <div>
       <h1>Call Center — consola del asesor</h1>
-      <p className="muted">Busca por teléfono, folio o nombre y ve todo el contexto acumulado: el paciente nunca repite su historia.</p>
+      <p className="muted">Busca por CURP, teléfono, folio o nombre y ve todo el contexto acumulado: el paciente nunca repite su historia.</p>
 
       <form className="card form-inline" onSubmit={handleBuscar}>
         <input
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Teléfono, folio (ej. SD-2026-0001) o nombre"
-          aria-label="Teléfono, folio o nombre"
+          placeholder="CURP, teléfono, folio (ej. SD-2026-0001) o nombre"
+          aria-label="CURP, teléfono, folio o nombre"
         />
         <button type="submit" className="btn btn-primary" disabled={buscando}>
           {buscando ? 'Buscando…' : 'Buscar trámite'}
@@ -416,7 +439,8 @@ function ContenidoAsesor() {
             </p>
             <dl className="kv">
               <dt>Paciente</dt><dd>{tramite.paciente?.nombre ?? '—'}</dd>
-              <dt>Teléfono</dt><dd>{tramite.paciente?.telefono ?? '—'}</dd>
+              <dt>CURP</dt><dd>{tramite.paciente?.curp ?? '—'}</dd>
+              <dt>Teléfono</dt><dd>{tramite.paciente?.telefono ?? 'Sin teléfono'}</dd>
               <dt>Estudio</dt><dd>{tramite.estudio.nombre}</dd>
               <dt>Precio cotizado</dt><dd><strong>${tramite.precioCotizado}</strong></dd>
               <dt>Clínica</dt><dd>{tramite.clinica ? `${tramite.clinica.nombre} (${tramite.clinica.ciudad})` : 'Sin seleccionar'}</dd>
@@ -447,8 +471,18 @@ function ContenidoAsesor() {
                 <input value={editNombre} onChange={(e) => setEditNombre(e.target.value)} required />
               </label>
               <label>
-                Teléfono (10 dígitos, sin +52)
-                <input value={editTelefono} onChange={(e) => setEditTelefono(e.target.value)} required />
+                CURP
+                <input
+                  value={editCurp}
+                  onChange={(e) => setEditCurp(normalizarCurp(e.target.value))}
+                  placeholder="CURP (18 caracteres)"
+                  maxLength={18}
+                  style={{ textTransform: 'uppercase' }}
+                />
+              </label>
+              <label>
+                Teléfono (10 dígitos, sin +52; vacío = borrar el teléfono)
+                <input value={editTelefono} onChange={(e) => setEditTelefono(e.target.value)} />
               </label>
               <label>
                 Fecha de nacimiento (DD/MM/AAAA)
@@ -493,7 +527,7 @@ function ContenidoAsesor() {
       <section className="card" style={{ marginTop: 16 }}>
         <h2>Nueva reservación</h2>
         <p className="muted">
-          Crea una reservación por teléfono, como Call Center: elige al paciente, luego el estudio,
+          Crea una reservación solo con la CURP del paciente (sin pedir teléfono): elige al paciente, luego el estudio,
           la clínica y la fecha y hora de la cita.
         </p>
 
@@ -502,8 +536,8 @@ function ContenidoAsesor() {
           <input
             value={resTelefono}
             onChange={(e) => setResTelefono(e.target.value)}
-            placeholder="Teléfono del paciente (10 dígitos)"
-            aria-label="Teléfono del paciente"
+            placeholder="CURP o teléfono del paciente"
+            aria-label="CURP o teléfono del paciente"
           />
           <button type="submit" className="btn btn-secondary" disabled={resCargando}>
             Buscar paciente
@@ -516,7 +550,7 @@ function ContenidoAsesor() {
         </form>
         {resPaciente && (
           <p>
-            Paciente: <strong>{resPaciente.nombre}</strong> · {resPaciente.telefono}
+            Paciente: <strong>{resPaciente.nombre}</strong> · {resPaciente.curp ?? resPaciente.telefono ?? 'Sin teléfono'}
           </p>
         )}
         {resMensaje && <p className="notice" role="status">{resMensaje}</p>}

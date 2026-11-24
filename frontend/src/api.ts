@@ -1,3 +1,4 @@
+import { esCurp, normalizarCurp } from './curp';
 import { MOCK_CLINICAS, MOCK_ESTUDIOS } from './mock';
 import type { Clinica, Estudio, Evento, Journey, Paciente, Tramite } from './types';
 
@@ -95,7 +96,8 @@ function normalizarPaciente(raw: Paciente): Paciente {
   return {
     id: String(raw.id),
     nombre: raw.nombre,
-    telefono: raw.telefono,
+    curp: raw.curp ?? null,
+    telefono: raw.telefono ?? null,
     fechaNacimiento: raw.fechaNacimiento ?? '',
   };
 }
@@ -109,11 +111,16 @@ function normalizarSesion(raw: Sesion): Sesion {
   };
 }
 
-/** Login de paciente (teléfono a 10 dígitos o primer nombre + contraseña) o staff. */
+/** Login de paciente (CURP, teléfono a 10 dígitos o primer nombre + contraseña) o staff. */
 export async function login(usuario: string, password: string): Promise<Sesion> {
-  // Solo se normaliza si parece teléfono (7+ dígitos); "ana"/"asesor" se mandan tal cual.
-  const digitos = normalizarTelefono(usuario);
-  const usuarioFinal = /^\d{7,}$/.test(digitos) ? digitos : usuario.trim();
+  // CURP: se manda normalizada (mayúsculas, sin espacios), nunca como teléfono.
+  const usuarioFinal = esCurp(usuario)
+    ? normalizarCurp(usuario)
+    : (() => {
+        // Solo se normaliza si parece teléfono (7+ dígitos); "ana"/"asesor" se mandan tal cual.
+        const digitos = normalizarTelefono(usuario);
+        return /^\d{7,}$/.test(digitos) ? digitos : usuario.trim();
+      })();
   const sesion = normalizarSesion(
     await fetchJson<Sesion>('/auth/login', {
       method: 'POST',
@@ -126,7 +133,10 @@ export async function login(usuario: string, password: string): Promise<Sesion> 
 
 export interface RegistroInput {
   nombre: string;
-  telefono: string;
+  /** CURP obligatoria (normalizada: mayúsculas, sin espacios). */
+  curp: string;
+  /** Teléfono opcional: vacío o null es válido. */
+  telefono: string | null;
   email: string;
   fechaNacimiento: string;
   password: string;
@@ -137,7 +147,11 @@ export async function registro(input: RegistroInput): Promise<Sesion> {
   const sesion = normalizarSesion(
     await fetchJson<Sesion>('/auth/registro', {
       method: 'POST',
-      body: JSON.stringify({ ...input, telefono: normalizarTelefono(input.telefono) }),
+      body: JSON.stringify({
+        ...input,
+        curp: normalizarCurp(input.curp),
+        telefono: input.telefono ? normalizarTelefono(input.telefono) : null,
+      }),
     }),
   );
   setToken(sesion.token);
@@ -282,7 +296,8 @@ export function normalizeTramite(raw: Record<string, unknown>): Tramite {
     ? {
         id: String(pacienteRaw.id),
         nombre: pacienteRaw.nombre,
-        telefono: pacienteRaw.telefono,
+        curp: pacienteRaw.curp ?? null,
+        telefono: pacienteRaw.telefono ?? null,
         fechaNacimiento: pacienteRaw.fechaNacimiento ?? '',
       }
     : undefined;
@@ -342,11 +357,13 @@ export async function getTramitePorFolio(folio: string): Promise<Tramite> {
   return normalizeTramite(raw);
 }
 
-/** TODOS los trámites (folios) de un paciente por teléfono, del más reciente al más viejo. */
-export async function getTramitesPorTelefono(telefono: string): Promise<Tramite[]> {
+/** TODOS los trámites (folios) de un paciente por teléfono, del más reciente al más viejo. Sin teléfono: lista vacía. */
+export async function getTramitesPorTelefono(telefono: string | null | undefined): Promise<Tramite[]> {
+  const tel = normalizarTelefono(telefono);
+  if (!tel) return [];
   try {
     const list = await fetchJson<Record<string, unknown>[]>(
-      `/tramites?telefono=${encodeURIComponent(normalizarTelefono(telefono))}`,
+      `/tramites?telefono=${encodeURIComponent(tel)}`,
     );
     return list.map(normalizeTramite);
   } catch (err) {
@@ -371,18 +388,39 @@ export async function getPacientePorTelefono(telefono: string): Promise<Paciente
   return fetchJson<Paciente>(`/pacientes?telefono=${encodeURIComponent(normalizarTelefono(telefono))}`);
 }
 
+/** Paciente por CURP (GET /api/pacientes?curp=). 404 si no existe. Sin fallback mock. */
+export async function buscarPacientePorCurp(curp: string): Promise<Paciente> {
+  const raw = await fetchJson<Paciente>(`/pacientes?curp=${encodeURIComponent(normalizarCurp(curp))}`);
+  return normalizarPaciente(raw);
+}
+
+/** Trámites (folios) de un paciente por su id (GET /api/pacientes/{id}/tramites). */
+export async function getTramitesPorPacienteId(id: string): Promise<Tramite[]> {
+  const list = await fetchJson<Record<string, unknown>[]>(
+    `/pacientes/${encodeURIComponent(id)}/tramites`,
+  );
+  return list.map(normalizeTramite);
+}
+
 export interface ActualizarPacienteInput {
   nombre?: string;
-  telefono?: string;
+  /** CURP nueva (se normaliza). Solo se envía si viene con valor. */
+  curp?: string;
+  /**
+   * Teléfono: "" (vacío) significa BORRAR el teléfono; ausente/null
+   * significa no tocarlo; con valor, se normaliza a 10 dígitos.
+   */
+  telefono?: string | null;
   email?: string;
   /** Fecha de nacimiento en ISO AAAA-MM-DD. */
   fechaNacimiento?: string;
 }
 
 /**
- * Edita un paciente (PUT /api/pacientes/{id}). 409 si el teléfono choca
- * con otro paciente. Con tramiteId el cambio queda en el log de eventos
- * de ese trámite. La contraseña NO se toca desde aquí. Sin fallback mock.
+ * Edita un paciente (PUT /api/pacientes/{id}). 409 si la CURP o el
+ * teléfono chocan con otro paciente. Con tramiteId el cambio queda en
+ * el log de eventos de ese trámite. La contraseña NO se toca desde aquí.
+ * Sin fallback mock.
  */
 export async function actualizarPaciente(
   id: string,
@@ -390,7 +428,11 @@ export async function actualizarPaciente(
   tramiteId?: string,
 ): Promise<Paciente> {
   const body: Record<string, unknown> = { ...input };
-  if (input.telefono) body.telefono = normalizarTelefono(input.telefono);
+  if (input.curp) body.curp = normalizarCurp(input.curp);
+  // telefono: "" se manda tal cual (borrar); null/ausente no se manda.
+  if (input.telefono === '') body.telefono = '';
+  else if (input.telefono) body.telefono = normalizarTelefono(input.telefono);
+  else delete body.telefono;
   if (tramiteId) body.tramiteId = tramiteId;
   const raw = await fetchJson<Paciente>(`/pacientes/${encodeURIComponent(id)}`, {
     method: 'PUT',
@@ -467,7 +509,7 @@ export interface CitaClinica {
   folio: string;
   tramiteId: string;
   pacienteNombre: string;
-  pacienteTelefono: string;
+  pacienteTelefono: string | null;
   estudioNombre: string;
   precio: number | null;
   clinicaNombre: string | null;
@@ -593,7 +635,10 @@ export async function registrarEventoCheckIn(tramiteId: string): Promise<Evento>
 
 export interface CrearTramiteInput {
   nombre: string;
-  telefono: string;
+  /** Teléfono del paciente; puede ser null/vacío si viene pacienteId (p. ej. reservación solo con CURP). */
+  telefono: string | null;
+  /** Si ya se conoce el paciente (búsqueda por CURP en Asesor), se usa directo sin buscar por teléfono. */
+  pacienteId?: string;
   /** Opcional: el formulario de cotizar ya no la pide. Sin sesión se
       crea el paciente solo con nombre y teléfono (la fecha es nullable
       en la BD); con sesión se usa la fecha de la sesión si la tiene. */
@@ -607,6 +652,16 @@ export interface CrearTramiteInput {
 export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
   const telefono = normalizarTelefono(input.telefono);
   {
+    // Con pacienteId conocido (CURP resuelta en Asesor, sesión en Web)
+    // no se busca por teléfono: el paciente puede no tener teléfono.
+    // Sin pacienteId, el flujo de antes: buscar por teléfono y, si no
+    // existe, registrarlo.
+    let paciente: Paciente;
+    if (input.pacienteId) {
+      paciente = { id: input.pacienteId, nombre: input.nombre, curp: null, telefono: telefono || null, fechaNacimiento: input.fechaNacimiento ?? '' };
+    } else if (!telefono) {
+      throw new ApiError(400, 'Falta el teléfono o la CURP del paciente para crear el trámite.');
+    } else {
     // El backend crea trámites por pacienteId (UUID), no por nombre/teléfono.
     // 1) Busca al paciente solo por teléfono (es la clave única; la fecha
     // de nacimiento ya no se pide en cotizar y tampoco se usa para
@@ -614,7 +669,6 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
     // 3) crea el trámite con ese pacienteId y el estudioId numérico.
     // Timeout largo (15 s): el backend frío puede tardar y un aborto
     // aquí dejaba el folio creado sin que el front lo supiera.
-    let paciente: Paciente;
     try {
       paciente = await fetchJson<Paciente>(
         `/pacientes?telefono=${encodeURIComponent(telefono)}`,
@@ -651,6 +705,7 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
           throw err2;
         }
       }
+    }
     }
     const raw = await fetchJson<Record<string, unknown>>(
       '/tramites',
@@ -719,7 +774,10 @@ export async function enviarWhatsapp(
   /** Si el bot entendió la intención (false = respondió "No entendí"). */
   entendido?: boolean;
 }> {
-  const tel = normalizarTelefono(telefono);
+  // CURP: se manda tal cual (normalizada), el backend la detecta y
+  // resuelve al paciente. Cualquier otro valor va como teléfono a
+  // 10 dígitos. Antes esto normalizaba TODO a dígitos y destruía la CURP.
+  const tel = esCurp(telefono) ? normalizarCurp(telefono) : normalizarTelefono(telefono);
   // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
   // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso, opciones, entendido } y,
   // si el paciente tiene varios folios activos y no dijo cual, { tramites }.
@@ -749,7 +807,8 @@ export async function enviarWhatsapp(
 export interface UsuarioAdmin {
   id: string;
   nombre: string;
-  telefono: string;
+  curp?: string | null;
+  telefono: string | null;
   email: string | null;
   fechaNacimiento: string | null;
   createdAt: string | null;
@@ -759,7 +818,9 @@ export interface UsuarioAdmin {
 
 export interface UsuarioAdminInput {
   nombre: string;
-  telefono: string;
+  curp?: string;
+  /** Vacío al editar = borrar el teléfono (contrato PUT /api/pacientes); al crear, opcional. */
+  telefono: string | null;
   email?: string;
   fechaNacimiento?: string;
   /** Obligatoria al crear; al editar, solo se cambia si se envía una nueva. */
@@ -771,19 +832,27 @@ export async function getUsuariosAdmin(): Promise<UsuarioAdmin[]> {
   return fetchJson<UsuarioAdmin[]>('/admin/usuarios');
 }
 
-/** Crea un usuario en la BD (POST /api/admin/usuarios). 409 si el teléfono ya existe. */
+/** Crea un usuario en la BD (POST /api/admin/usuarios). 409 si la CURP o el teléfono ya existe. */
 export async function crearUsuarioAdmin(input: UsuarioAdminInput): Promise<UsuarioAdmin> {
   return fetchJson<UsuarioAdmin>('/admin/usuarios', {
     method: 'POST',
-    body: JSON.stringify({ ...input, telefono: normalizarTelefono(input.telefono) }),
+    body: JSON.stringify({
+      ...input,
+      ...(input.curp ? { curp: normalizarCurp(input.curp) } : {}),
+      telefono: input.telefono ? normalizarTelefono(input.telefono) : null,
+    }),
   });
 }
 
-/** Edita un usuario (PUT /api/admin/usuarios/{id}). 409 si el teléfono choca con otro usuario. */
+/** Edita un usuario (PUT /api/admin/usuarios/{id}). 409 si la CURP o el teléfono chocan con otro usuario. Teléfono "" = borrar. */
 export async function actualizarUsuarioAdmin(id: string, input: UsuarioAdminInput): Promise<UsuarioAdmin> {
   return fetchJson<UsuarioAdmin>(`/admin/usuarios/${encodeURIComponent(id)}`, {
     method: 'PUT',
-    body: JSON.stringify({ ...input, telefono: normalizarTelefono(input.telefono) }),
+    body: JSON.stringify({
+      ...input,
+      ...(input.curp ? { curp: normalizarCurp(input.curp) } : {}),
+      telefono: input.telefono === '' ? '' : input.telefono ? normalizarTelefono(input.telefono) : null,
+    }),
   });
 }
 

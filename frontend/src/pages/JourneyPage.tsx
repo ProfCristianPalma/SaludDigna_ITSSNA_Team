@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { esTelefono, getJourney, getTramitesPorTelefono, isApiError } from '../api';
+import { buscarPacientePorCurp, esTelefono, getJourney, getTramitesPorPacienteId, getTramitesPorTelefono, isApiError } from '../api';
+import { esCurp } from '../curp';
 import { formatearFechaHora } from '../fechas';
 import type { EstadoTramite, Evento, Journey, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
@@ -71,11 +72,41 @@ export default function JourneyPage() {
     }
   }, []);
 
-  /** Acepta folio, telefono o UUID. Con telefono, muestra sus folios para elegir uno. */
+  /** Acepta folio, CURP, telefono o UUID. Con CURP o teléfono, muestra sus folios para elegir uno. */
   const cargar = useCallback(async (q: string) => {
     const query = q.trim();
     if (!query) return;
     setError('');
+    if (esCurp(query)) {
+      setCargando(true);
+      try {
+        const p = await buscarPacientePorCurp(query);
+        const lista = await getTramitesPorPacienteId(p.id);
+        if (lista.length === 0) {
+          setJourney(null);
+          setFolios([]);
+          setError('Ese paciente aún no tiene folios.');
+          return;
+        }
+        if (lista.length === 1) {
+          await cargarJourney(lista[0].folio);
+          return;
+        }
+        setJourney(null);
+        setFolios(lista);
+      } catch (err) {
+        setJourney(null);
+        setFolios([]);
+        setError(
+          isApiError(err)
+            ? 'No se encontró ningún folio con esa CURP.'
+            : 'El backend no respondió, no se pudo buscar. Revisa que el backend esté arriba.',
+        );
+      } finally {
+        setCargando(false);
+      }
+      return;
+    }
     if (esTelefono(query)) {
       setCargando(true);
       try {
@@ -137,7 +168,7 @@ export default function JourneyPage() {
           void cargar(busqueda);
         }}
       >
-        <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Folio (ej. SD-2026-0001), teléfono o UUID" aria-label="Folio, teléfono o UUID" />
+        <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Folio (ej. SD-2026-0001), CURP, teléfono o UUID" aria-label="Folio, CURP, teléfono o UUID" />
         <button type="submit" className="btn btn-primary" disabled={cargando}>
           Cargar trámite
         </button>
@@ -149,7 +180,7 @@ export default function JourneyPage() {
 
       {folios.length > 1 && (
         <section className="card" style={{ marginTop: 16 }}>
-          <h2>Folios de ese teléfono</h2>
+          <h2>Folios de ese paciente</h2>
           <p className="muted">Ese paciente tiene varios folios, uno por estudio. Elige uno para ver su Journey.</p>
           <ul>
             {folios.map((t) => (
@@ -167,7 +198,7 @@ export default function JourneyPage() {
       )}
 
       {!tramite && !cargando && folios.length === 0 && (
-        <p className="notice">{error || 'Escribe un folio, un teléfono o un UUID y pulsa "Cargar trámite".'}</p>
+        <p className="notice">{error || 'Escribe un folio, una CURP, un teléfono o un UUID y pulsa "Cargar trámite".'}</p>
       )}
       {cargando && !tramite && folios.length === 0 && <p className="muted">Cargando journey…</p>}
 

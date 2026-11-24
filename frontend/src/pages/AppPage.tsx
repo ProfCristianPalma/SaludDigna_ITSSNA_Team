@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError, logout } from '../api';
+import { getPerfilYo, getToken, getTramitesPorPacienteId, isApiError, logout } from '../api';
 import { formatearFechaHora } from '../fechas';
 import type { Paciente, Tramite } from '../types';
+import { siguientePaso } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 export default function AppPage() {
@@ -30,8 +31,9 @@ export default function AppPage() {
         return;
       }
       setPaciente(perfil.paciente);
-      // Solo los folios de ESTE paciente, por su teléfono de sesión.
-      const lista = await getTramitesPorTelefono(perfil.paciente.telefono);
+      // Solo los folios de ESTE paciente, por su id de sesión (ya no
+      // por teléfono: el paciente puede no tener teléfono).
+      const lista = await getTramitesPorPacienteId(perfil.paciente.id);
       setTramites(lista);
       if (lista.length === 0) setMensaje('No tienes folios todavía. Cotiza un estudio en la web y aparecerá aquí.');
     } catch (err) {
@@ -64,10 +66,11 @@ export default function AppPage() {
   }, [cargar]);
 
   function abrirWhatsapp() {
-    // WhatsApp arranca con el paciente logueado. El teléfono se pasa
-    // por sessionStorage: solo vive en esta pestaña, no queda guardado.
+    // WhatsApp arranca con el paciente logueado. Su CURP (o su
+    // teléfono si no tiene CURP) se pasa por sessionStorage: solo vive
+    // en esta pestaña, no queda guardado.
     if (paciente) {
-      window.sessionStorage.setItem('saluddigna-wa-telefono', paciente.telefono);
+      window.sessionStorage.setItem('saluddigna-wa-telefono', paciente.curp ?? paciente.telefono ?? '');
     }
   }
 
@@ -92,7 +95,7 @@ export default function AppPage() {
           {sinSesion ? (
             <>
               <h1>Hola 👋</h1>
-              <p className="muted">Para ver tus citas, primero inicia sesión con tu teléfono y tu contraseña.</p>
+              <p className="muted">Para ver tus citas, primero inicia sesión con tu CURP o tu teléfono y tu contraseña.</p>
               <div className="actions">
                 <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
                 <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
@@ -103,7 +106,7 @@ export default function AppPage() {
             <>
               <h1>Hola, {primerNombre} 👋</h1>
               <p className="muted">Tu salud, en una sola conversación.</p>
-              {paciente && <p className="muted">{paciente.nombre} · {paciente.telefono}</p>}
+              {paciente && <p className="muted">{paciente.nombre} · {paciente.curp ?? paciente.telefono ?? 'Sin teléfono'}</p>}
               <div className="actions" style={{ marginBottom: 12 }}>
                 <button type="button" className="btn btn-secondary" onClick={cerrarSesion}>
                   Cerrar sesión
@@ -142,6 +145,7 @@ export default function AppPage() {
                   </p>
                   <p>Clínica: {t.clinica ? `${t.clinica.nombre} (${t.clinica.ciudad})` : 'Por elegir'}</p>
                   <p>Fecha: {t.fechaCita ? formatearFechaHora(t.fechaCita) : 'Por confirmar'}</p>
+                  <p className="muted">{siguientePaso(t)}</p>
                   <div className="actions">
                     <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
                       Ver mi Journey

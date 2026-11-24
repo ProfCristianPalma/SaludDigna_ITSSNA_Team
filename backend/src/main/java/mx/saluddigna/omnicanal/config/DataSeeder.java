@@ -29,13 +29,16 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * 5 usuarios ejemplo, cada uno en un estado distinto del flujo,
  * para que el asesor, WhatsApp y el Journey tengan casos que mostrar:
- * - Ana Garcia Lopez      2220000001  COTIZADO              (ana123)
- * - Luis Hernandez Torres 2221112233  CLINICA_SELECCIONADA  (luis123)
- * - Maria Fernanda Ruiz   2224445566  CONFIRMADO (cita 24/11/2026 10:00) (maria123)
- * - Carlos Mendoza Vega   2387778899  ATENDIDO              (carlos123)
- * - Fernanda Lopez Diaz   2229990011  DATOS_PENDIENTES      (fernanda123)
+ * - Ana Garcia Lopez      2220000001  GALA900514MDFRPN00  COTIZADO              (ana123)
+ * - Luis Hernandez Torres 2221112233  HETL850322HDFRRS01  CLINICA_SELECCIONADA  (luis123)
+ * - Maria Fernanda Ruiz   2224445566  RUXF920809MDFZXR02  CONFIRMADO (cita 24/11/2026 10:00) (maria123)
+ * - Carlos Mendoza Vega   2387778899  MEVC781130HDFNGR03  ATENDIDO              (carlos123)
+ * - Fernanda Lopez Diaz   2229990011  LODF010617MDFPZR04  DATOS_PENDIENTES      (fernanda123)
  * Contraseñas demo = primer nombre en minúsculas + 123, guardadas como
  * hash PBKDF2 (nunca en texto plano). Si el paciente ya tiene hash, no se pisa.
+ * Las CURPs son DE DEMOSTRACIÓN (formato válido, derivadas del nombre,
+ * la fecha de nacimiento, el sexo y la entidad DF; no son CURPs reales
+ * de ninguna persona). Si el paciente ya tiene CURP, no se pisa.
  */
 @Component
 public class DataSeeder implements CommandLineRunner {
@@ -91,18 +94,18 @@ public class DataSeeder implements CommandLineRunner {
         Clinica tehuacan = clinicaPorNombre("Tehuacan");
 
         // 1. Ana — COTIZADO
-        Paciente ana = paciente("Ana Garcia Lopez", "2220000001", "ana.demo@saluddigna.test", LocalDate.of(1990, 5, 14), "ana123");
+        Paciente ana = paciente("Ana Garcia Lopez", "2220000001", "ana.demo@saluddigna.test", LocalDate.of(1990, 5, 14), "ana123", "GALA900514MDFRPN00");
         tramiteCotizado(ana, ultrasonido);
 
         // 2. Luis — CLINICA_SELECCIONADA
-        Paciente luis = paciente("Luis Hernandez Torres", "2221112233", "luis.demo@saluddigna.test", LocalDate.of(1985, 3, 22), "luis123");
+        Paciente luis = paciente("Luis Hernandez Torres", "2221112233", "luis.demo@saluddigna.test", LocalDate.of(1985, 3, 22), "luis123", "HETL850322HDFRRS01");
         Tramite tLuis = tramiteCotizado(luis, tiroideo);
         if (tLuis != null && tLuis.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tLuis.getId(), puebla.getId());
         }
 
         // 3. Maria — CONFIRMADO
-        Paciente maria = paciente("Maria Fernanda Ruiz", "2224445566", "maria.demo@saluddigna.test", LocalDate.of(1992, 8, 9), "maria123");
+        Paciente maria = paciente("Maria Fernanda Ruiz", "2224445566", "maria.demo@saluddigna.test", LocalDate.of(1992, 8, 9), "maria123", "RUXF920809MDFZXR02");
         Tramite tMaria = tramiteCotizado(maria, radiografia);
         if (tMaria != null && tMaria.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tMaria.getId(), tehuacan.getId());
@@ -110,7 +113,7 @@ public class DataSeeder implements CommandLineRunner {
         }
 
         // 4. Carlos — ATENDIDO
-        Paciente carlos = paciente("Carlos Mendoza Vega", "2387778899", "carlos.demo@saluddigna.test", LocalDate.of(1978, 11, 30), "carlos123");
+        Paciente carlos = paciente("Carlos Mendoza Vega", "2387778899", "carlos.demo@saluddigna.test", LocalDate.of(1978, 11, 30), "carlos123", "MEVC781130HDFNGR03");
         Tramite tCarlos = tramiteCotizado(carlos, analisis);
         if (tCarlos != null && tCarlos.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tCarlos.getId(), puebla.getId());
@@ -119,7 +122,7 @@ public class DataSeeder implements CommandLineRunner {
         }
 
         // 5. Fernanda — DATOS_PENDIENTES
-        Paciente fernanda = paciente("Fernanda Lopez Diaz", "2229990011", "fernanda.demo@saluddigna.test", LocalDate.of(2001, 6, 17), "fernanda123");
+        Paciente fernanda = paciente("Fernanda Lopez Diaz", "2229990011", "fernanda.demo@saluddigna.test", LocalDate.of(2001, 6, 17), "fernanda123", "LODF010617MDFPZR04");
         if (tramites.findByPacienteIdOrderByCreatedAtDesc(fernanda.getId()).isEmpty()) {
             Tramite t = tramiteService.crearTramite(fernanda.getId(), null, Canal.WEB.name());
             tramiteService.marcarDatosPendientes(t.getId(), Map.of("curp", "Pendiente: CURP", "ordenMedica", "Pendiente: orden medica"));
@@ -144,11 +147,17 @@ public class DataSeeder implements CommandLineRunner {
      * Busca al paciente por teléfono o lo crea. Si existe sin contraseña
      * (cuenta de antes de V4 o creada por la Web al cotizar), le asigna
      * la contraseña demo; si ya tiene hash, NO lo pisa (idempotente).
+     * Si existe sin CURP, le asigna la CURP semilla; si ya tiene CURP,
+     * NO se pisa (idempotente).
      */
-    private Paciente paciente(String nombre, String telefono, String email, LocalDate fechaNacimiento, String password) {
+    private Paciente paciente(String nombre, String telefono, String email, LocalDate fechaNacimiento, String password, String curp) {
         String tel = mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(telefono);
         Paciente p = pacientes.findByTelefono(tel)
                 .orElseGet(() -> pacientes.save(new Paciente(nombre, tel, email, fechaNacimiento)));
+        if (p.getCurp() == null || p.getCurp().isBlank()) {
+            p.setCurp(curp);
+            p = pacientes.save(p);
+        }
         if (p.getPasswordHash() == null || p.getPasswordHash().isBlank()) {
             p.setPasswordHash(passwords.hash(password));
             p = pacientes.save(p);

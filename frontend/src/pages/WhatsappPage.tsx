@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { getPerfilYo, getToken, getTramitesPorTelefono, enviarWhatsapp, normalizarTelefono } from '../api';
+import { getPerfilYo, getToken, getTramitesPorPacienteId, enviarWhatsapp, normalizarTelefono } from '../api';
+import { esCurp } from '../curp';
 import { fechaMananaLatina } from '../fechas';
 import type { Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
@@ -16,13 +17,16 @@ const WA_TELEFONO_KEY = 'saluddigna-wa-telefono';
 const WA_FOLIO_KEY = 'saluddigna-wa-folio';
 
 export default function WhatsappPage() {
-  // Sin sesión y sin teléfono guardado en esta pestaña, el teléfono
-  // arranca VACÍO: ya no hay ningún usuario de ejemplo cargado.
-  const [telefono, setTelefono] = useState('');
+  // Identificador del paciente: su CURP o su teléfono. El bot lo
+  // resuelve en el backend; el front lo manda tal cual (enviarWhatsapp
+  // no normaliza una CURP a dígitos). Sin sesión y sin identificador
+  // guardado en esta pestaña, arranca VACÍO: ya no hay ningún usuario
+  // de ejemplo cargado.
+  const [identificador, setIdentificador] = useState('');
   const [paciente, setPaciente] = useState<Paciente | null>(null);
   const [texto, setTexto] = useState('');
   const [mensajes, setMensajes] = useState<MensajeChat[]>([
-    { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. ¿En qué te ayudo hoy? Si ya empezaste un trámite en la web, dime tu teléfono o tu folio y lo retomamos donde lo dejaste.' },
+    { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. ¿En qué te ayudo hoy? Si ya empezaste un trámite en la web, dime tu CURP, tu teléfono o tu folio y lo retomamos donde lo dejaste.' },
   ]);
   const [tramite, setTramite] = useState<Tramite | null>(null);
   const [tramites, setTramites] = useState<Tramite[]>([]);
@@ -37,20 +41,20 @@ export default function WhatsappPage() {
   const folioAutoEnviado = useRef(false);
 
   // Con sesión, WhatsApp arranca con EL paciente logueado: su nombre,
-  // su teléfono y sus folios. Sin sesión, el teléfono arranca vacío y
-  // hay que escribirlo (o entrar desde App/Historial, que lo dejan en
-  // sessionStorage como respaldo solo para esta pestaña).
+  // su CURP o teléfono y sus folios. Sin sesión, el identificador
+  // arranca vacío y hay que escribirlo (o entrar desde App/Historial,
+  // que lo dejan en sessionStorage como respaldo solo para esta pestaña).
   useEffect(() => {
     async function cargarSesion() {
       const guardadoTel = window.sessionStorage.getItem(WA_TELEFONO_KEY);
-      if (guardadoTel) setTelefono(normalizarTelefono(guardadoTel));
+      if (guardadoTel) setIdentificador(esCurp(guardadoTel) ? guardadoTel.trim().toUpperCase() : normalizarTelefono(guardadoTel));
       if (!getToken()) return;
       try {
         const perfil = await getPerfilYo();
         if (!perfil.paciente) return;
         setPaciente(perfil.paciente);
-        setTelefono(perfil.paciente.telefono);
-        const lista = await getTramitesPorTelefono(perfil.paciente.telefono);
+        setIdentificador(perfil.paciente.curp ?? perfil.paciente.telefono ?? '');
+        const lista = await getTramitesPorPacienteId(perfil.paciente.id);
         setTramites(lista);
         const activos = lista.filter((t) => t.estado !== 'ATENDIDO');
         if (activos.length > 0) {
@@ -85,7 +89,7 @@ export default function WhatsappPage() {
     setTexto('');
     setEnviando(true);
     try {
-      const res = await enviarWhatsapp(telefono, limpio, sinFolio ? undefined : folioActivo ?? undefined);
+      const res = await enviarWhatsapp(identificador, limpio, sinFolio ? undefined : folioActivo ?? undefined);
       if (res.tramite) {
         setTramite(res.tramite);
         setFolioActivo(res.tramite.folio);
@@ -123,12 +127,12 @@ export default function WhatsappPage() {
   useEffect(() => {
     if (!sesionLista || folioAutoEnviado.current) return;
     const folio = window.sessionStorage.getItem(WA_FOLIO_KEY);
-    if (!folio || !telefono) return;
+    if (!folio || !identificador) return;
     folioAutoEnviado.current = true;
     window.sessionStorage.removeItem(WA_FOLIO_KEY);
     void handleEnviar(new Event('submit') as unknown as React.FormEvent, folio);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [telefono, sesionLista]);
+  }, [identificador, sesionLista]);
 
   const primerNombre = paciente?.nombre.split(' ')[0];
 
@@ -137,8 +141,8 @@ export default function WhatsappPage() {
       <h1>WhatsApp — continúa tu trámite</h1>
       <p className="muted">
         {paciente
-          ? `Hola, ${primerNombre}: el bot te reconoce por tu teléfono ${paciente.telefono} y tus folios.`
-          : 'El bot reconoce tus trámites por teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Si inicias sesión, arranca con tus datos.'}
+          ? `Hola, ${primerNombre}: el bot te reconoce por tu CURP o teléfono${paciente.curp ? ` (${paciente.curp})` : paciente.telefono ? ` (${paciente.telefono})` : ''} y tus folios.`
+          : 'El bot reconoce tus trámites por CURP o teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Si inicias sesión, arranca con tus datos.'}
       </p>
 
       <div className="wa-shell">
@@ -177,10 +181,10 @@ export default function WhatsappPage() {
 
         <form className="wa-form" onSubmit={handleEnviar}>
           <input
-            value={telefono}
-            onChange={(e) => setTelefono(e.target.value)}
-            placeholder="Tu teléfono (10 dígitos)"
-            aria-label="Teléfono"
+            value={identificador}
+            onChange={(e) => setIdentificador(e.target.value)}
+            placeholder="Tu CURP o teléfono"
+            aria-label="CURP o teléfono"
           />
           <input
             value={texto}

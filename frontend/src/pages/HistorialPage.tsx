@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getPerfilYo, getToken, getTramitesPorTelefono, isApiError } from '../api';
+import { getPerfilYo, getToken, getTramitesPorPacienteId, isApiError } from '../api';
 import { formatearFechaHora } from '../fechas';
 import type { EstadoTramite, Paciente, Tramite } from '../types';
+import { siguientePaso } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 // Pasos del flujo, en orden: INICIADO → COTIZADO → CLINICA_SELECCIONADA
@@ -83,7 +84,7 @@ export default function HistorialPage() {
         return;
       }
       setPaciente(perfil.paciente);
-      const lista = await getTramitesPorTelefono(perfil.paciente.telefono);
+      const lista = await getTramitesPorPacienteId(perfil.paciente.id);
       setTramites(lista);
       if (lista.length === 0) setMensaje('Aún no tienes folios.');
     } catch (err) {
@@ -116,9 +117,9 @@ export default function HistorialPage() {
   }, [cargar]);
 
   function continuarEnWhatsapp(t: Tramite) {
-    // El teléfono y el folio se pasan por sessionStorage: solo viven
-    // en esta pestaña, no quedan guardados para la próxima visita.
-    window.sessionStorage.setItem('saluddigna-wa-telefono', t.paciente?.telefono ?? paciente?.telefono ?? '');
+    // La CURP (o el teléfono) y el folio se pasan por sessionStorage:
+    // solo viven en esta pestaña, no quedan guardados para la próxima visita.
+    window.sessionStorage.setItem('saluddigna-wa-telefono', t.paciente?.curp ?? t.paciente?.telefono ?? paciente?.curp ?? paciente?.telefono ?? '');
     window.sessionStorage.setItem('saluddigna-wa-folio', t.folio);
   }
 
@@ -126,7 +127,7 @@ export default function HistorialPage() {
     return (
       <div>
         <h1>Mi historial de folios</h1>
-        <p className="muted">Para ver tus folios, primero inicia sesión con tu teléfono y tu contraseña.</p>
+        <p className="muted">Para ver tus folios, primero inicia sesión con tu CURP o tu teléfono y tu contraseña.</p>
         <div className="actions">
           <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
           <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
@@ -139,7 +140,7 @@ export default function HistorialPage() {
     <div>
       <h1>Mi historial de folios</h1>
       <p className="muted">
-        {paciente ? `${paciente.nombre} · ${paciente.telefono}` : 'Tus folios, guardados en la base de datos.'}
+        {paciente ? `${paciente.nombre} · ${paciente.curp ?? paciente.telefono ?? 'Sin teléfono'}` : 'Tus folios, guardados en la base de datos.'}
         {' '}Un folio por cada estudio que hayas elegido, del más reciente al más viejo.
       </p>
 
@@ -194,11 +195,12 @@ export default function HistorialPage() {
                 ))}
               </ul>
             )}
+            <p className="muted">{siguientePaso(t)}</p>
             <div className="actions">
               <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
                 Ver mi Journey
               </Link>
-              {t.estado === 'COTIZADO' && (
+              {t.estado !== 'ATENDIDO' && t.estado !== 'NO_PRESENTADO' && t.estado !== 'NO_REALIZADO' && t.estado !== 'CANCELADO' && (
                 <Link className="btn btn-primary" to="/whatsapp" onClick={() => continuarEnWhatsapp(t)}>
                   Continuar en WhatsApp
                 </Link>

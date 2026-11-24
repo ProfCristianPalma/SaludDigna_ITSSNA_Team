@@ -3,8 +3,10 @@ package mx.saluddigna.omnicanal.identidad;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
+import mx.saluddigna.omnicanal.tramite.TramiteService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,9 +25,11 @@ import org.springframework.web.server.ResponseStatusException;
 public class PacienteController {
 
     private final PacienteService service;
+    private final TramiteService tramites;
 
-    public PacienteController(PacienteService service) {
+    public PacienteController(PacienteService service, TramiteService tramites) {
         this.service = service;
+        this.tramites = tramites;
     }
 
     @PostMapping
@@ -57,6 +61,14 @@ public class PacienteController {
         return service.buscarPorNombre(nombre);
     }
 
+    /** GET /api/pacientes?curp=GALA900514MDFRPN00 → el paciente de esa CURP (404 si no existe). */
+    @GetMapping(params = "curp")
+    public Paciente buscarPorCurp(@RequestParam String curp) {
+        return service.buscarPorCurp(curp)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "Paciente no encontrado con CURP " + curp));
+    }
+
     /** GET /api/pacientes → todos los pacientes (lista para el asesor). */
     @GetMapping
     public List<Paciente> listarTodos() {
@@ -68,8 +80,22 @@ public class PacienteController {
         return service.buscarPorId(id);
     }
 
+    /**
+     * GET /api/pacientes/{id}/tramites → todos los trámites del paciente,
+     * del más reciente al más viejo, como mapas planos (mismo formato
+     * que /api/tramites/folio/{folio} y que el journey: paciente,
+     * estudio y clínica ya resueltos, nada de entidades JPA).
+     * 404 si el paciente no existe.
+     */
+    @GetMapping("/{id}/tramites")
+    public List<Map<String, Object>> tramitesDePaciente(@PathVariable UUID id) {
+        service.buscarPorId(id);
+        return tramites.listarDePacienteComoMapa(id);
+    }
+
     public record ActualizarPacienteRequest(
             String nombre,
+            String curp,
             String telefono,
             String email,
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaNacimiento,
@@ -78,13 +104,15 @@ public class PacienteController {
     }
 
     /**
-     * PUT /api/pacientes/{id} → edita nombre/teléfono/email/fecha de
+     * PUT /api/pacientes/{id} → edita nombre/CURP/teléfono/email/fecha de
      * nacimiento (asesor / Call Center). La contraseña NO se toca
-     * desde aquí. 409 si el teléfono choca con otro paciente.
+     * desde aquí. 409 si la CURP o el teléfono chocan con otro paciente.
+     * telefono "" (vacío) BORRA el teléfono; telefono ausente no lo toca.
+     * curp vacía o ausente NO borra la CURP.
      */
     @PutMapping("/{id}")
     public Paciente actualizar(@PathVariable UUID id, @RequestBody ActualizarPacienteRequest req) {
         return service.actualizar(
-                id, req.nombre(), req.telefono(), req.email(), req.fechaNacimiento(), req.tramiteId());
+                id, req.nombre(), req.telefono(), req.email(), req.fechaNacimiento(), req.tramiteId(), req.curp());
     }
 }

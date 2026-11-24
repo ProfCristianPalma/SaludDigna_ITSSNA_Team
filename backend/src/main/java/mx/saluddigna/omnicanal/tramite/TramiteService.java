@@ -365,7 +365,7 @@ public class TramiteService {
                     t.getFolio(),
                     t.getId().toString(),
                     paciente == null ? "—" : paciente.getNombre(),
-                    paciente == null ? "—" : paciente.getTelefono(),
+                    paciente == null || paciente.getTelefono() == null ? "—" : paciente.getTelefono(),
                     estudioNombre,
                     t.getPrecioCotizado(),
                     clinicaNombre,
@@ -415,6 +415,18 @@ public class TramiteService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Paciente no encontrado con telefono " + telefono));
         return tramites.findByPacienteIdOrderByCreatedAtDesc(paciente.getId());
+    }
+
+    /**
+     * Trámites de un paciente como mapas planos (mismo formato que
+     * buscarPorFolioComoMapa / journey: paciente, estudio y clínica ya
+     * resueltos). Lo usa GET /api/pacientes/{id}/tramites.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listarDePacienteComoMapa(UUID pacienteId) {
+        return tramites.findByPacienteIdOrderByCreatedAtDesc(pacienteId).stream()
+                .map(this::tramiteComoMapa)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -509,6 +521,7 @@ public class TramiteService {
         return mapaDe(
                 "id", p.getId().toString(),
                 "nombre", p.getNombre(),
+                "curp", p.getCurp(),
                 "telefono", p.getTelefono(),
                 "fechaNacimiento", p.getFechaNacimiento() == null ? null : p.getFechaNacimiento().toString());
     }

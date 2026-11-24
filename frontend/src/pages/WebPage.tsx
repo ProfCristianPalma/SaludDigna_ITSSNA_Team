@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { confirmar, cotizar, crearTramite, getClinicas, getEstudios, getHorasOcupadas, getPerfilYo, getToken, getTramitesPorTelefono, isApiError, seleccionarClinica } from '../api';
+import { confirmar, cotizar, crearTramite, getClinicas, getEstudios, getHorasOcupadas, getPerfilYo, getToken, getTramitesPorPacienteId, getTramitesPorTelefono, isApiError, seleccionarClinica } from '../api';
 import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import type { Clinica, Estudio, Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
@@ -36,9 +36,19 @@ export default function WebPage() {
   const [horasOcupadas, setHorasOcupadas] = useState<string[]>([]);
   const [cargandoHoras, setCargandoHoras] = useState(false);
 
-  // Todos los folios de ese telefono, desde la BD: un folio por estudio.
-  async function cargarFolios(tel: string) {
-    if (!tel.trim()) return;
+  // Todos los folios de ese paciente, desde la BD: un folio por estudio.
+  // Con sesión se cargan por id (el paciente puede no tener teléfono);
+  // sin sesión, por el teléfono del formulario.
+  async function cargarFolios(tel: string | null | undefined, pacienteId?: string) {
+    if (pacienteId) {
+      try {
+        setMisFolios(await getTramitesPorPacienteId(pacienteId));
+      } catch {
+        setMisFolios([]);
+      }
+      return;
+    }
+    if (!tel?.trim()) return;
     try {
       setMisFolios(await getTramitesPorTelefono(tel));
     } catch {
@@ -64,8 +74,8 @@ export default function WebPage() {
         if (perfil.paciente) {
           setSesionPaciente(perfil.paciente);
           setNombre(perfil.paciente.nombre);
-          setTelefono(perfil.paciente.telefono);
-          void cargarFolios(perfil.paciente.telefono);
+          setTelefono(perfil.paciente.telefono ?? '');
+          void cargarFolios(perfil.paciente.telefono, perfil.paciente.id);
           return;
         }
       } catch {
@@ -112,16 +122,21 @@ export default function WebPage() {
     e.preventDefault();
     if (!estudioId) return;
     // Teléfono y nombre efectivos: de la sesión si la hay, del formulario si no.
+    // Con sesión el paciente puede no tener teléfono: entonces se cotiza
+    // por su pacienteId (crearTramite lo acepta) y sus folios se listan por id.
     const telefonoEfectivo = sesionPaciente?.telefono ?? telefono;
     const nombreEfectivo = sesionPaciente?.nombre ?? nombre;
     const fechaSesion = sesionPaciente?.fechaNacimiento || undefined;
+    const listarFoliosActuales = () =>
+      sesionPaciente ? getTramitesPorPacienteId(sesionPaciente.id) : getTramitesPorTelefono(telefonoEfectivo);
+    const recargarFolios = () => cargarFolios(telefonoEfectivo, sesionPaciente?.id);
     setCargando(true);
     setMensaje('');
     // Folios que ya existían antes de este intento, para detectar en
     // la recuperación si el folio sí se creó aunque la respuesta tardó.
     let idsPrevios = new Set(misFolios.map((t) => t.id));
     try {
-      const actuales = await getTramitesPorTelefono(telefonoEfectivo);
+      const actuales = await listarFoliosActuales();
       idsPrevios = new Set(actuales.map((t) => t.id));
     } catch {
       // Sin red no hay lista previa: la recuperación lo intentará igual.
@@ -131,6 +146,7 @@ export default function WebPage() {
       const creado = await crearTramite({
         nombre: nombreEfectivo,
         telefono: telefonoEfectivo,
+        pacienteId: sesionPaciente?.id,
         ...(fechaSesion ? { fechaNacimiento: fechaSesion } : {}),
         estudioId,
         canal: 'WEB',
@@ -139,7 +155,7 @@ export default function WebPage() {
       setTramite(cotizado);
       window.sessionStorage.setItem(FOLIO_KEY, cotizado.folio);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
-      await cargarFolios(telefonoEfectivo);
+      await recargarFolios();
     } catch {
       // Falso negativo: con el backend frío la respuesta de crear o de
       // cotizar puede tardar y el cliente aborta, pero el servidor
@@ -147,7 +163,7 @@ export default function WebPage() {
       // vuelve a consultar la BD: si apareció un folio nuevo con este
       // estudio, se muestra en el panel como creado.
       try {
-        const lista = await getTramitesPorTelefono(telefonoEfectivo);
+        const lista = await listarFoliosActuales();
         let nuevo =
           lista.find((t) => !idsPrevios.has(t.id) && t.estudio.id === estudioId) ??
           lista.find((t) => !idsPrevios.has(t.id));
@@ -166,7 +182,7 @@ export default function WebPage() {
           setMensaje(
             `La respuesta tardó, pero tu folio sí se creó: ${nuevo.folio}. Ya lo puedes ver en tu Historial.`,
           );
-          await cargarFolios(telefonoEfectivo);
+          await recargarFolios();
           return;
         }
       } catch {
@@ -187,7 +203,7 @@ export default function WebPage() {
       const actualizado = await seleccionarClinica(tramite.id, clinicaId);
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
-      await cargarFolios(sesionPaciente?.telefono ?? telefono);
+      await cargarFolios(sesionPaciente?.telefono ?? telefono, sesionPaciente?.id);
     } catch {
       setMensaje('No se pudo seleccionar la clínica: el backend no respondió y no se guardó nada. Revisa que el backend esté arriba.');
     } finally {
@@ -213,7 +229,7 @@ export default function WebPage() {
       setMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,
       );
-      await cargarFolios(sesionPaciente?.telefono ?? telefono);
+      await cargarFolios(sesionPaciente?.telefono ?? telefono, sesionPaciente?.id);
     } catch (err) {
       // 409 (hueco ocupado) o 400 (fecha/hora pasada): el mensaje del
       // backend se muestra tal cual, sin inventar otro.
@@ -245,7 +261,7 @@ export default function WebPage() {
           <h2>1 · Tus datos y tu estudio</h2>
           {sesionPaciente ? (
             <p className="muted" style={{ marginBottom: 12 }}>
-              Cotizando como <strong>{sesionPaciente.nombre}</strong> · {sesionPaciente.telefono}. Tus datos
+              Cotizando como <strong>{sesionPaciente.nombre}</strong> · {sesionPaciente.curp ?? sesionPaciente.telefono ?? 'Sin teléfono'}. Tus datos
               vienen de tu sesión y no se pueden modificar aquí.
             </p>
           ) : (
@@ -392,11 +408,11 @@ export default function WebPage() {
         <h2>Mis folios</h2>
         <p className="muted">
           Un folio por estudio que hayas elegido, todos guardados en la base de datos
-          con tu teléfono. Cada uno sigue su propio flujo: estudio, precio, clínica, cita y estado.
+          con tu cuenta. Cada uno sigue su propio flujo: estudio, precio, clínica, cita y estado.
           También los puedes ver todos juntos en tu <Link to="/historial">Historial de folios</Link>.
         </p>
         {misFolios.length === 0 ? (
-          <p className="muted">Aún no tienes folios con este teléfono. Cotiza un estudio y aparecerá aquí.</p>
+          <p className="muted">Aún no tienes folios con esta cuenta. Cotiza un estudio y aparecerá aquí.</p>
         ) : (
           <ul>
             {misFolios.map((t) => (

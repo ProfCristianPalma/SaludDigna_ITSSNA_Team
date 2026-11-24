@@ -11,6 +11,10 @@ public interface PacienteRepository extends JpaRepository<Paciente, UUID> {
 
     Optional<Paciente> findByTelefono(String telefono);
 
+    Optional<Paciente> findByCurp(String curp);
+
+    boolean existsByCurp(String curp);
+
     List<Paciente> findByNombreContainingIgnoreCase(String nombre);
 
     Optional<Paciente> findByTelefonoAndFechaNacimiento(String telefono, LocalDate fechaNacimiento);

@@ -15,7 +15,7 @@ una sola conversación, con trazabilidad completa.
    canal, actor, payload, timestamp). Todo cambio de estado es un evento.
 4. Máquina de estados: INICIADO → DATOS_PENDIENTES → COTIZADO →
    CLINICA_SELECCIONADA → CONFIRMADO → ATENDIDO.
-5. Identidad: teléfono móvil como llave principal (WhatsApp = teléfono),
+5. Identidad: CURP como llave principal (única, V7), teléfono opcional,
    email secundario, folio `SD-2026-XXXX` como llave de continuidad.
 6. Canales simulados sobre la misma API (Web, WhatsApp, Call Center, App,
    Clínica); si Salud Digna da sandbox real, se conecta el mismo endpoint.
@@ -58,13 +58,17 @@ cd frontend && npm install && npm run dev
 
 ## Credenciales de prueba
 
-| Paciente | Teléfono (usuario) | Contraseña | Nac. |
-|---|---|---|---|
-| Ana García López | `2220000001` | `ana123` | 1990-05-14 |
-| Luis Hernández Torres | `2221112233` | `luis123` | 1985-03-22 |
-| María Fernanda Ruiz | `2224445566` | `maria123` | 1992-08-09 |
-| Carlos Mendoza Vega | `2387778899` | `carlos123` | 1978-11-30 |
-| Fernanda López Díaz | `2229990011` | `fernanda123` | 2001-06-17 |
+| Paciente | CURP (usuario) | Teléfono (usuario) | Contraseña | Nac. |
+|---|---|---|---|---|
+| Ana García López | `GALA900514MDFRPN00` | `2220000001` | `ana123` | 1990-05-14 |
+| Luis Hernández Torres | `HETL850322HDFRRS01` | `2221112233` | `luis123` | 1985-03-22 |
+| María Fernanda Ruiz | `RUXF920809MDFZXR02` | `2224445566` | `maria123` | 1992-08-09 |
+| Carlos Mendoza Vega | `MEVC781130HDFNGR03` | `2387778899` | `carlos123` | 1978-11-30 |
+| Fernanda López Díaz | `LODF010617MDFPZR04` | `2229990011` | `fernanda123` | 2001-06-17 |
+
+Las CURPs son **de demostración** (formato válido, derivadas del nombre,
+la fecha de nacimiento, el sexo y la entidad DF; no son CURPs reales de
+ninguna persona). El login vale con la CURP **o** con el teléfono.
 
 | Rol staff | Usuario | Contraseña | Uso |
 |---|---|---|---|
@@ -72,6 +76,7 @@ cd frontend && npm install && npm run dev
 | Administrador | `admin` | `admin123` | Clínica, Asesor y `/admin/usuarios` |
 
 También vale el primer nombre como usuario de paciente (`ana` + `ana123`).
+El login acepta CURP, teléfono a 10 dígitos o primer nombre.
 En la demo también vale el header `X-Rol: Paciente | Asesor | Administrador`
 (simplificación documentada).
 
@@ -142,6 +147,27 @@ sin trámites.
 > siempre en una migración nueva (V6, V7…), como hizo V5 con los
 > teléfonos.
 
+## CURP como llave omnicanal (V7)
+
+La **CURP** es la llave principal del paciente (`CurpUtil`: normaliza a
+mayúsculas sin espacios y valida formato `^[A-Z]{4}\d{6}[HM][A-Z]{2}[A-Z]{3}[A-Z\d]\d$`,
+fecha real en los 6 dígitos AAMMDD y código de entidad válido). El
+**teléfono es opcional** desde V7: un paciente puede registrarse solo con
+CURP, y la BD ya no impone teléfono único ni NOT NULL (la unicidad del
+teléfono, cuando hay, la sigue imponiendo el servicio).
+
+- **Login:** `POST /api/auth/login` acepta CURP, teléfono o primer nombre.
+- **Registro:** `POST /api/auth/registro` exige CURP; teléfono opcional.
+- **Búsqueda:** `GET /api/pacientes?curp=` y `GET /api/pacientes/{id}/tramites`
+  (trámites del paciente como mapas planos, igual que el journey).
+- **Editar:** `PUT /api/pacientes/{id}` acepta `curp` (valida formato y
+  unicidad; vacía no la borra) y `telefono: ""` **borra** el teléfono;
+  `telefono` ausente no lo toca.
+- **WhatsApp:** `POST /api/canales/whatsapp/mensaje` acepta CURP o
+  teléfono en el campo `telefono`; un identificador no registrado se
+  registra en el chat con nombre + CURP + fecha DD/MM/AAAA + contraseña.
+- Las CURPs semilla son de demostración (ver tabla de credenciales).
+
 ## Fechas en formato latinoamericano DD/MM/AAAA
 
 Todas las fechas que ve, escribe o recibe el usuario son **DD/MM/AAAA**:
@@ -162,16 +188,22 @@ La App (`/app`) exige sesión: ya no se escribe el teléfono a mano ni se
 muestra a Ana por defecto. El nombre que sale en "Hola, …" es el del
 paciente logueado, y solo se ven **sus** folios.
 
-- **Registro:** `POST /api/auth/registro` con `{nombre, telefono, email,
-  fechaNacimiento, password}` (mínimo 6 caracteres). El teléfono es único:
-  si ya existe con contraseña devuelve 409. Si la cuenta ya existía por
-  haber cotizado en la Web sin registrarse (sin contraseña), el registro la
-  completa en vez de bloquearla. Al registrarse hace auto-login y devuelve
+- **Registro:** `POST /api/auth/registro` con `{nombre, curp, telefono,
+  email, fechaNacimiento, password}` (mínimo 6 caracteres). La **CURP es
+  obligatoria** (formato válido, fecha real y entidad válida; si no viene
+  la fecha de nacimiento se deriva de la CURP, y si viene y no coincide
+  con ella devuelve 400); el **teléfono es opcional** y el email es
+  obligatorio. La CURP es única: si ya existe con contraseña devuelve
+  409. Si la cuenta ya existía por haber cotizado en la Web sin
+  registrarse (sin contraseña), el registro la completa en vez de
+  bloquearla. Al registrarse hace auto-login y devuelve
   `{token, paciente, rol:"PACIENTE"}`.
 - **Login:** `POST /api/auth/login` con `{usuario, password}`. El usuario
-  puede ser el **teléfono a 10 dígitos** (`2220000001`) o el **primer nombre**
-  (`ana`); el staff usa `asesor` / `admin`. Contraseña incorrecta o
-  usuario inexistente → 401. Devuelve `{token, usuario, rol, paciente?}`.
+  puede ser la **CURP** (`GALA900514MDFRPN00`), el **teléfono a 10 dígitos**
+  (`2220000001`) o el **primer nombre** (`ana`); el staff usa `asesor` /
+  `admin`. Contraseña incorrecta o usuario inexistente → 401. Devuelve
+  `{token, usuario, rol, paciente?}`. El `usuario` de la sesión (y el
+  subject del JWT) es el teléfono si el paciente tiene, si no su CURP.
 - **Sesión:** `GET /api/auth/yo` con header `Authorization: Bearer <token>`
   devuelve `{paciente, usuario, rol}`. El front guarda el token en
   **`sessionStorage`** (`saluddigna-token`) y lo manda en cada llamada.
@@ -275,13 +307,15 @@ Endpoints: `GET /api/admin/staff`, `POST /api/admin/staff`,
 
 ## Usuarios ejemplo (5, en la BD de Postgres y en el mock)
 
-| # | Paciente | Teléfono | Nac. | Estudio | Estado |
-|---|---|---|---|---|---|
-| 1 | Ana García López | 2220000001 | 14/05/1990 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
-| 2 | Luis Hernández Torres | 2221112233 | 22/03/1985 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
-| 3 | María Fernanda Ruiz | 2224445566 | 09/08/1992 | Radiografía tórax $450 | CONFIRMADO (cita 24/11/2026 10:00) |
-| 4 | Carlos Mendoza Vega | 2387778899 | 30/11/1978 | Análisis sangre $380 | ATENDIDO |
-| 5 | Fernanda López Díaz | 2229990011 | 17/06/2001 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
+| # | Paciente | CURP | Teléfono | Nac. | Estudio | Estado |
+|---|---|---|---|---|---|---|
+| 1 | Ana García López | `GALA900514MDFRPN00` | 2220000001 | 14/05/1990 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
+| 2 | Luis Hernández Torres | `HETL850322HDFRRS01` | 2221112233 | 22/03/1985 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
+| 3 | María Fernanda Ruiz | `RUXF920809MDFZXR02` | 2224445566 | 09/08/1992 | Radiografía tórax $450 | CONFIRMADO (cita 24/11/2026 10:00) |
+| 4 | Carlos Mendoza Vega | `MEVC781130HDFNGR03` | 2387778899 | 30/11/1978 | Análisis sangre $380 | ATENDIDO |
+| 5 | Fernanda López Díaz | `LODF010617MDFPZR04` | 2229990011 | 17/06/2001 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
+
+CURPs de demostración (formato válido, no reales; ver "Credenciales de prueba").
 
 Se siembran con Flyway `V2__seed.sql` + `V3__usuarios_ejemplo.sql` y con
 `DataSeeder` (idempotente, crea el trámite de cada uno en su estado).
@@ -327,8 +361,10 @@ leen y escriben sobre los mismos trámites.
   del folio y las opciones válidas, sin inventar avances. Cada
   respuesta trae `opciones` (botones) y `entendido`. Un "hola" NUNCA
   crea un trámite: solo se crea cuando el usuario pide un estudio
-  concreto. Un teléfono no registrado se registra en el mismo chat
-  con nombre completo + fecha de nacimiento (DD/MM/AAAA).
+  concreto. Un identificador no registrado (CURP o teléfono) se registra
+  en el mismo chat con nombre completo + CURP + fecha de nacimiento
+  (DD/MM/AAAA) + contraseña (mínimo 6); si la CURP ya existe, se sigue
+  con ese paciente.
 - **Clínica:** la recepción lista los trámites CONFIRMADOS desde la BD
   (`GET /api/tramites?estado=CONFIRMADO`). El check-in queda en el log de
   eventos y "Registrar atención" llama a `POST /api/tramites/{id}/atender`
@@ -477,13 +513,16 @@ lecturas de trámites no inventan datos, avisan que no se guardó nada.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| POST | `/api/auth/login` | Login paciente (teléfono o primer nombre) o staff, devuelve JWT + paciente |
-| POST | `/api/auth/registro` | Registro de paciente en BD + auto-login (409 si el teléfono ya tiene contraseña) |
+| POST | `/api/auth/login` | Login paciente (CURP, teléfono o primer nombre) o staff, devuelve JWT + paciente |
+| POST | `/api/auth/registro` | Registro de paciente en BD + auto-login (CURP obligatoria, teléfono opcional; 409 si la CURP ya tiene contraseña) |
 | GET | `/api/auth/yo` | Perfil de la sesión (Bearer), `{paciente, usuario, rol}` |
 | POST | `/api/pacientes` | Registrar paciente |
 | GET | `/api/pacientes?telefono=` | Resolver identidad por teléfono (+fechaNacimiento) |
+| GET | `/api/pacientes?curp=` | Resolver identidad por CURP |
+| GET | `/api/pacientes/{id}/tramites` | Trámites del paciente (mapas planos, como el journey) |
 | GET | `/api/pacientes/buscar?nombre=` | Pacientes por nombre (contiene, sin mayúsculas) |
 | GET | `/api/pacientes` | Lista de todos los pacientes |
+| PUT | `/api/pacientes/{id}` | Editar paciente (acepta `curp`; `telefono: ""` borra el teléfono) |
 | GET | `/api/admin/usuarios` | Usuarios con cantidad de folios (solo por URL en el front) |
 | POST | `/api/admin/usuarios` | Crear usuario (409 si el teléfono ya existe) |
 | PUT | `/api/admin/usuarios/{id}` | Editar usuario (la contraseña solo cambia si se envía una nueva) |

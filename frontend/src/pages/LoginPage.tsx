@@ -26,7 +26,7 @@ export default function LoginPage() {
     } catch (err) {
       setError(
         isApiError(err) && err.status === 401
-          ? 'Usuario o contraseña incorrectos. Revisa tu teléfono y tu contraseña.'
+          ? 'Usuario o contraseña incorrectos. Revisa tus datos y tu contraseña.'
           : isApiError(err)
             ? err.message
             : 'No se pudo conectar con el backend. Verifica que Docker esté arriba.',
@@ -39,16 +39,16 @@ export default function LoginPage() {
   return (
     <div>
       <h1>Iniciar sesión</h1>
-      <p className="muted">Entra con tu teléfono (o tu primer nombre) y tu contraseña. La sesión dura lo que dura esta pestaña: al cerrarla se cierra sola y la app arranca limpia, sin usuario cargado.</p>
+      <p className="muted">Entra con tu CURP o tu teléfono (o tu primer nombre) y tu contraseña. La sesión dura lo que dura esta pestaña: al cerrarla se cierra sola y la app arranca limpia, sin usuario cargado.</p>
 
       <section className="card" style={{ maxWidth: 480 }}>
         <form onSubmit={handleSubmit} className="form">
           <label>
-            Usuario / teléfono
+            CURP o teléfono
             <input
               value={usuario}
               onChange={(e) => setUsuario(e.target.value)}
-              placeholder="2220000001 o ana"
+              placeholder="CURP, 2220000001 o ana"
               autoComplete="username"
               required
             />
@@ -80,7 +80,7 @@ export default function LoginPage() {
       <section className="card" style={{ maxWidth: 480, marginTop: 16 }}>
         <h2>Cuentas de prueba</h2>
         <ul>
-          <li>Ana García López — teléfono <code>2220000001</code> — contraseña <code>ana123</code></li>
+          <li>Ana García López — CURP o teléfono <code>2220000001</code> — contraseña <code>ana123</code></li>
           <li>Luis Hernández Torres — <code>2221112233</code> — <code>luis123</code></li>
           <li>María Fernanda Ruiz — <code>2224445566</code> — <code>maria123</code></li>
           <li>Asesor — usuario <code>asesor</code> — <code>asesor123</code></li>

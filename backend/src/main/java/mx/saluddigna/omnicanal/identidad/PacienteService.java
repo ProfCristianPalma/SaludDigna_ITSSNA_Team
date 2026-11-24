@@ -35,10 +35,42 @@ public class PacienteService {
         this.objectMapper = objectMapper;
     }
 
-    /** Registra un paciente nuevo. El telefono es unico: si ya existe, 409. El telefono se guarda a 10 digitos (ver TelefonoUtil). */
+    /**
+     * Registra un paciente nuevo. La CURP es la llave omnicanal (V7):
+     * si trae CURP se valida (formato + fecha real + entidad, 400 si es
+     * inválida) y es única (409 si ya existe); si trae teléfono se guarda
+     * a 10 dígitos y también es único (409). El teléfono es opcional:
+     * un paciente puede registrarse solo con CURP (teléfono null).
+     * Si trae CURP y no trae fecha de nacimiento, se deriva de la CURP;
+     * si trae ambas y no coinciden, 400.
+     */
     public Paciente registrar(Paciente paciente) {
+        String curp = CurpUtil.normalizar(paciente.getCurp());
+        if (curp != null && curp.isBlank()) {
+            curp = null;
+        }
+        if (curp != null) {
+            CurpUtil.validar(curp).ifPresent(motivo -> {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, motivo);
+            });
+            if (repository.existsByCurp(curp)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Ya existe un paciente con la CURP " + curp);
+            }
+            paciente.setCurp(curp);
+            LocalDate fechaCurp = CurpUtil.fechaDesdeCurp(curp);
+            if (paciente.getFechaNacimiento() == null) {
+                paciente.setFechaNacimiento(fechaCurp);
+            } else if (fechaCurp != null && !fechaCurp.equals(paciente.getFechaNacimiento())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "La fecha de nacimiento no coincide con la CURP");
+            }
+        } else {
+            paciente.setCurp(null);
+        }
         if (paciente.getTelefono() != null) {
-            paciente.setTelefono(TelefonoUtil.normalizar(paciente.getTelefono()));
+            String tel = TelefonoUtil.normalizar(paciente.getTelefono());
+            paciente.setTelefono(tel == null || tel.isBlank() ? null : tel);
         }
         if (paciente.getTelefono() != null && repository.existsByTelefono(paciente.getTelefono())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -62,10 +94,23 @@ public class PacienteService {
 
     @Transactional(readOnly = true)
     public Optional<Paciente> buscarPorTelefono(String telefono) {
-        if (telefono == null) {
+        if (telefono == null || telefono.isBlank()) {
             return Optional.empty();
         }
-        return repository.findByTelefono(TelefonoUtil.normalizar(telefono));
+        String tel = TelefonoUtil.normalizar(telefono);
+        if (tel == null || tel.isBlank()) {
+            return Optional.empty();
+        }
+        return repository.findByTelefono(tel);
+    }
+
+    /** Resuelve por CURP normalizada (mayúsculas, sin espacios). Vacía o null → vacío. */
+    @Transactional(readOnly = true)
+    public Optional<Paciente> buscarPorCurp(String curp) {
+        if (curp == null || curp.isBlank()) {
+            return Optional.empty();
+        }
+        return repository.findByCurp(CurpUtil.normalizar(curp));
     }
 
     /** Pacientes cuyo nombre contiene el texto (sin importar mayusculas). */
@@ -90,15 +135,21 @@ public class PacienteService {
 
     /**
      * Edita los datos de un paciente (asesor / Call Center): nombre,
-     * telefono, email y fecha de nacimiento. La contrasena NO se toca
-     * desde aqui. El telefono sigue siendo unico (409 si choca con
-     * otro paciente). El cambio queda en el log de eventos del tramite
-     * indicado (o del tramite mas reciente del paciente, si no se
-     * indica uno): sin folio no hay donde colgar el evento, asi que
-     * en ese caso solo se guarda el cambio.
+     * CURP, telefono, email y fecha de nacimiento. La contrasena NO se
+     * toca desde aqui. La CURP y el telefono siguen siendo unicos
+     * (409 si chocan con otro paciente). El cambio queda en el log de
+     * eventos del tramite indicado (o del tramite mas reciente del
+     * paciente, si no se indica uno): sin folio no hay donde colgar el
+     * evento, asi que en ese caso solo se guarda el cambio.
+     *
+     * Semántica de los opcionales (distinta para CURP y teléfono):
+     * - curp null o vacía → no se toca (una CURP asignada NO se borra);
+     *   con valor y distinta → se valida formato y unicidad.
+     * - telefono null → no se toca; telefono "" (vacío) → se BORRA
+     *   (queda en null); con valor → se normaliza y se valida unicidad.
      */
     public Paciente actualizar(UUID id, String nombre, String telefono, String email,
-                               LocalDate fechaNacimiento, UUID tramiteId) {
+                               LocalDate fechaNacimiento, UUID tramiteId, String curp) {
         Paciente paciente = buscarPorId(id);
         Map<String, String> cambios = new LinkedHashMap<>();
         if (nombre != null && !nombre.isBlank()) {
@@ -108,20 +159,44 @@ public class PacienteService {
                 paciente.setNombre(nuevo);
             }
         }
-        if (telefono != null && !telefono.isBlank()) {
-            String tel = TelefonoUtil.normalizar(telefono);
-            if (tel.isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono es obligatorio");
-            }
-            repository.findByTelefono(tel).ifPresent(otro -> {
+        if (curp != null && !curp.isBlank()) {
+            String c = CurpUtil.normalizar(curp);
+            CurpUtil.validar(c).ifPresent(motivo -> {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, motivo);
+            });
+            repository.findByCurp(c).ifPresent(otro -> {
                 if (!otro.getId().equals(id)) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
-                            "Ya existe otro paciente con el teléfono " + tel);
+                            "Ya existe otro paciente con la CURP " + c);
                 }
             });
-            if (!tel.equals(paciente.getTelefono())) {
-                cambios.put("telefono", tel);
-                paciente.setTelefono(tel);
+            if (!c.equals(paciente.getCurp())) {
+                cambios.put("curp", c);
+                paciente.setCurp(c);
+            }
+        }
+        if (telefono != null) {
+            if (telefono.isBlank()) {
+                // "" = borrar el teléfono (queda en null). null = no tocarlo.
+                if (paciente.getTelefono() != null) {
+                    cambios.put("telefono", "");
+                    paciente.setTelefono(null);
+                }
+            } else {
+                String tel = TelefonoUtil.normalizar(telefono);
+                if (tel == null || tel.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono es obligatorio");
+                }
+                repository.findByTelefono(tel).ifPresent(otro -> {
+                    if (!otro.getId().equals(id)) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                "Ya existe otro paciente con el teléfono " + tel);
+                    }
+                });
+                if (!tel.equals(paciente.getTelefono())) {
+                    cambios.put("telefono", tel);
+                    paciente.setTelefono(tel);
+                }
             }
         }
         if (email != null) {
@@ -156,6 +231,12 @@ public class PacienteService {
             }
         }
         return paciente;
+    }
+
+    /** Sobrecarga sin CURP (no la toca). */
+    public Paciente actualizar(UUID id, String nombre, String telefono, String email,
+                               LocalDate fechaNacimiento, UUID tramiteId) {
+        return actualizar(id, nombre, telefono, email, fechaNacimiento, tramiteId, null);
     }
 
     private String json(Map<String, String> mapa) {

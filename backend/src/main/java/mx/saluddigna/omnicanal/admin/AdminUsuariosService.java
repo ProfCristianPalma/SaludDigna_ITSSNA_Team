@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.catalogo.CitaRepository;
 import mx.saluddigna.omnicanal.eventos.EventoRepository;
+import mx.saluddigna.omnicanal.identidad.CurpUtil;
 import mx.saluddigna.omnicanal.identidad.PacienteRepository;
 import mx.saluddigna.omnicanal.identidad.TelefonoUtil;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
@@ -40,6 +41,7 @@ public class AdminUsuariosService {
     public record UsuarioAdminDTO(
             UUID id,
             String nombre,
+            String curp,
             String telefono,
             String email,
             LocalDate fechaNacimiento,
@@ -74,41 +76,93 @@ public class AdminUsuariosService {
                 .toList();
     }
 
-    public UsuarioAdminDTO crear(String nombre, String telefono, String email,
+    /**
+     * Crea un usuario. La CURP es obligatoria (única llave omnicanal);
+     * el teléfono es opcional: un usuario sin teléfono se crea con null
+     * y se identifica solo por su CURP. Si no se da fecha de nacimiento,
+     * se deriva de la CURP; si se da y no coincide con la CURP, 400.
+     */
+    public UsuarioAdminDTO crear(String nombre, String curp, String telefono, String email,
                                  LocalDate fechaNacimiento, String password) {
         validarNombre(nombre);
-        String tel = normalizarTelefonoObligatorio(telefono);
+        String curpNormalizada = CurpUtil.normalizar(curp);
+        CurpUtil.validar(curpNormalizada).ifPresent(motivo -> {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "CURP inválida: " + motivo);
+        });
+        if (pacientes.existsByCurp(curpNormalizada)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Ya existe un usuario con la CURP " + curpNormalizada);
+        }
+        String tel = normalizarTelefonoOpcional(telefono);
+        if (tel != null && pacientes.existsByTelefono(tel)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Ya existe un usuario con el teléfono " + tel);
+        }
         if (password == null || password.length() < 6) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "La contraseña debe tener al menos 6 caracteres");
         }
-        if (pacientes.existsByTelefono(tel)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Ya existe un usuario con el teléfono " + tel);
+        LocalDate fecha = fechaNacimiento;
+        LocalDate fechaCurp = CurpUtil.fechaDesdeCurp(curpNormalizada);
+        if (fecha == null) {
+            fecha = fechaCurp;
+        } else if (fechaCurp != null && !fecha.equals(fechaCurp)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La fecha de nacimiento no coincide con la fecha de la CURP");
         }
-        Paciente paciente = new Paciente(nombre.trim(), tel, limpiarEmail(email), fechaNacimiento);
+        Paciente paciente = new Paciente(nombre.trim(), tel, limpiarEmail(email), fecha);
+        paciente.setCurp(curpNormalizada);
         paciente.setPasswordHash(passwords.hash(password));
         return aDto(pacientes.save(paciente));
     }
 
-    public UsuarioAdminDTO actualizar(UUID id, String nombre, String telefono, String email,
+    /**
+     * Edita un usuario. La CURP solo cambia si se envía una nueva válida
+     * y única (vacía/null no la borra). El teléfono: null = no tocar,
+     * "" (vacío) = borrarlo, con valor = cambiarlo (409 si choca).
+     */
+    public UsuarioAdminDTO actualizar(UUID id, String nombre, String curp, String telefono, String email,
                                       LocalDate fechaNacimiento, String password) {
         Paciente paciente = buscar(id);
         if (nombre != null && !nombre.isBlank()) {
             paciente.setNombre(nombre.trim());
         }
-        if (telefono != null && !telefono.isBlank()) {
-            String tel = TelefonoUtil.normalizar(telefono);
-            if (tel.isBlank()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono es obligatorio");
-            }
-            pacientes.findByTelefono(tel).ifPresent(otro -> {
-                if (!otro.getId().equals(id)) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT,
-                            "Ya existe otro usuario con el teléfono " + tel);
-                }
+        if (curp != null && !curp.isBlank()) {
+            String curpNormalizada = CurpUtil.normalizar(curp);
+            CurpUtil.validar(curpNormalizada).ifPresent(motivo -> {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "CURP inválida: " + motivo);
             });
-            paciente.setTelefono(tel);
+            if (!curpNormalizada.equals(paciente.getCurp())) {
+                pacientes.findByCurp(curpNormalizada).ifPresent(otro -> {
+                    if (!otro.getId().equals(id)) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                "Ya existe otro usuario con la CURP " + curpNormalizada);
+                    }
+                });
+                LocalDate fechaCurp = CurpUtil.fechaDesdeCurp(curpNormalizada);
+                if (fechaNacimiento != null && fechaCurp != null && !fechaNacimiento.equals(fechaCurp)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "La fecha de nacimiento no coincide con la fecha de la CURP");
+                }
+                paciente.setCurp(curpNormalizada);
+            }
+        }
+        if (telefono != null) {
+            if (telefono.isBlank()) {
+                paciente.setTelefono(null);
+            } else {
+                String tel = TelefonoUtil.normalizar(telefono);
+                if (tel.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono no es válido");
+                }
+                pacientes.findByTelefono(tel).ifPresent(otro -> {
+                    if (!otro.getId().equals(id)) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                "Ya existe otro usuario con el teléfono " + tel);
+                    }
+                });
+                paciente.setTelefono(tel);
+            }
         }
         if (email != null) {
             paciente.setEmail(limpiarEmail(email));
@@ -158,6 +212,7 @@ public class AdminUsuariosService {
         return new UsuarioAdminDTO(
                 paciente.getId(),
                 paciente.getNombre(),
+                paciente.getCurp(),
                 paciente.getTelefono(),
                 paciente.getEmail(),
                 paciente.getFechaNacimiento(),
@@ -172,13 +227,14 @@ public class AdminUsuariosService {
         }
     }
 
-    private String normalizarTelefonoObligatorio(String telefono) {
+    /** Teléfono vacío/null -> null (opcional); con valor se normaliza a 10 dígitos. */
+    private String normalizarTelefonoOpcional(String telefono) {
         if (telefono == null || telefono.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono es obligatorio");
+            return null;
         }
         String tel = TelefonoUtil.normalizar(telefono);
         if (tel.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono es obligatorio");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El teléfono no es válido");
         }
         return tel;
     }

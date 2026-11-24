@@ -150,7 +150,7 @@ function ContenidoDoctor() {
               <h2>{c.estudioNombre}</h2>
               <dl className="kv">
                 <dt>Paciente</dt><dd>{c.pacienteNombre}</dd>
-                <dt>Teléfono</dt><dd>{c.pacienteTelefono}</dd>
+                <dt>Teléfono</dt><dd>{c.pacienteTelefono ?? 'Sin teléfono'}</dd>
                 <dt>Clínica</dt><dd>{c.clinicaNombre ? `${c.clinicaNombre} (${c.clinicaCiudad ?? ''})` : 'Sin seleccionar'}</dd>
                 <dt>Fecha de cita</dt><dd>{c.fechaCita ? formatearFechaHora(c.fechaCita) : 'Sin confirmar'}</dd>
                 <dt>Precio</dt><dd><strong>${c.precio ?? '—'}</strong></dd>
