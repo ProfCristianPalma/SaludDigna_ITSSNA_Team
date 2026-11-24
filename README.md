@@ -65,6 +65,21 @@ cd frontend && npm install && npm run dev
 | María Fernanda Ruiz | `RUXF920809MDFZXR02` | `maria123` | 1992-08-09 |
 | Carlos Mendoza Vega | `MEVC781130HDFNGR03` | `carlos123` | 1978-11-30 |
 | Fernanda López Díaz | `LODF010617MDFPZR04` | `fernanda123` | 2001-06-17 |
+| Jorge Alberto Mendoza Ruiz | `MERJ880315HDFNZR00` | `jorge123` | 1988-03-15 |
+| Sofía Isabel Herrera Gómez | `HEGS950722MDFRMF00` | `sofia123` | 1995-07-22 |
+| Diego Alejandro Torres Sánchez | `TOSD900108HDFRNG00` | `diego123` | 1990-01-08 |
+| Valeria Nicole Ortiz Medina | `ORMV981130MDFTDL00` | `valeria123` | 1998-11-30 |
+| Ricardo Emmanuel Vargas León | `VALR830605HDFRNC00` | `ricardo123` | 1983-06-05 |
+| Camila Fernanda Reyes Morales | `REMC970214MDFYRM00` | `camila123` | 1997-02-14 |
+| Andrés Felipe Cruz Navarro | `CUNA910919HDFRVN00` | `andres123` | 1991-09-19 |
+| Mariana Guadalupe Flores Díaz | `FODM930427MDFLZR00` | `mariana123` | 1993-04-27 |
+| Miguel Ángel Soto Ramírez | `SORM861203HDFTMG00` | `miguel123` | 1986-12-03 |
+| Daniela Alejandra Vega Castillo | `VECD990816MDFGSN00` | `daniela123` | 1999-08-16 |
+| Óscar Eduardo Peña Jiménez | `PEJO800525HDFXMS00` | `oscar123` | 1980-05-25 |
+| Paola Fernanda Luna Herrera | `LUHP021011MDFNRL00` | `paola123` | 2002-10-11 |
+| Javier Alejandro Méndez Ortiz | `MEOJ890707HDFNRV00` | `javier123` | 1989-07-07 |
+| Lucía Fernanda Aguilar Ramos | `AURL960321MDFGMC00` | `lucia123` | 1996-03-21 |
+| Eduardo José Salazar Peña | `SAPE840909HDFLXD00` | `eduardo123` | 1984-09-09 |
 
 Las CURPs son **de demostración** (formato válido, derivadas del nombre,
 la fecha de nacimiento, el sexo y la entidad DF; no son CURPs reales de
@@ -305,17 +320,40 @@ ahí (usuario en minúsculas, hash PBKDF2, rol desde la BD).
 Endpoints: `GET /api/admin/staff`, `POST /api/admin/staff`,
 `PUT /api/admin/staff/{id}`, `DELETE /api/admin/staff/{id}`.
 
-## Usuarios ejemplo (5, en la BD de Postgres y en el mock)
+## Usuarios ejemplo (20, en la BD de Postgres y en el mock)
 
 | # | Paciente | CURP | Teléfono | Nac. | Estudio | Estado |
 |---|---|---|---|---|---|---|
 | 1 | Ana García López | `GALA900514MDFRPN00` | 2220000001 | 14/05/1990 | Ultrasonido abdominal $850 | COTIZADO (folio `SD-2026-0001`) |
 | 2 | Luis Hernández Torres | `HETL850322HDFRRS01` | 2221112233 | 22/03/1985 | Perfil tiroideo $620 | CLINICA_SELECCIONADA (Puebla Centro) |
-| 3 | María Fernanda Ruiz | `RUXF920809MDFZXR02` | 2224445566 | 09/08/1992 | Radiografía tórax $450 | CONFIRMADO (cita 24/11/2026 10:00) |
-| 4 | Carlos Mendoza Vega | `MEVC781130HDFNGR03` | 2387778899 | 30/11/1978 | Análisis sangre $380 | ATENDIDO |
+| 3 | María Fernanda Ruiz | `RUXF920809MDFZXR02` | 2224445566 | 09/08/1992 | Radiografía tórax $450 | CONFIRMADO (cita mañana 10:00, Tehuacán) |
+| 4 | Carlos Mendoza Vega | `MEVC781130HDFNGR03` | 2387778899 | 30/11/1978 | Análisis sangre $380 | ATENDIDO (cita mañana 09:00, Puebla) |
 | 5 | Fernanda López Díaz | `LODF010617MDFPZR04` | 2229990011 | 17/06/2001 | — (pendiente) | DATOS_PENDIENTES (CURP, orden médica) |
+| 6 | Jorge Alberto Mendoza Ruiz | `MERJ880315HDFNZR00` | 2223334455 | 15/03/1988 | Ultrasonido abdominal $850 | CONFIRMADO (cita mañana 08:00, Puebla) |
+| 7 | Sofía Isabel Herrera Gómez | `HEGS950722MDFRMF00` | 2224446677 | 22/07/1995 | Perfil tiroideo $620 | CONFIRMADO (cita mañana 09:30, Puebla) |
+| 8 | Diego Alejandro Torres Sánchez | `TOSD900108HDFRNG00` | 2225557788 | 08/01/1990 | Radiografía tórax $450 | CONFIRMADO (cita mañana 08:30, Tehuacán) |
+| 9 | Valeria Nicole Ortiz Medina | `ORMV981130MDFTDL00` | 2226668899 | 30/11/1998 | Análisis sangre $380 | CONFIRMADO (cita mañana 11:00, Tehuacán) |
+| 10 | Ricardo Emmanuel Vargas León | `VALR830605HDFRNC00` | 2227779900 | 05/06/1983 | Radiografía tórax $450 | CONFIRMADO (cita mañana 14:00, Puebla) |
+| 11 | Camila Fernanda Reyes Morales | `REMC970214MDFYRM00` | 2228880011 | 14/02/1997 | Ultrasonido abdominal $850 | CONFIRMADO (cita +2 días 09:00, Tehuacán) |
+| 12 | Andrés Felipe Cruz Navarro | `CUNA910919HDFRVN00` | 2229991122 | 19/09/1991 | Análisis sangre $380 | CONFIRMADO (cita +2 días 10:00, Puebla) |
+| 13 | Mariana Guadalupe Flores Díaz | `FODM930427MDFLZR00` | 2221113344 | 27/04/1993 | Perfil tiroideo $620 | CONFIRMADO (cita +2 días 15:30, Tehuacán) |
+| 14 | Miguel Ángel Soto Ramírez | `SORM861203HDFTMG00` | 2222224455 | 03/12/1986 | Ultrasonido abdominal $850 | CONFIRMADO (cita +3 días 10:00, Puebla) |
+| 15 | Daniela Alejandra Vega Castillo | `VECD990816MDFGSN00` | 2223335566 | 16/08/1999 | Radiografía tórax $450 | CONFIRMADO (cita +3 días 10:30, Tehuacán) |
+| 16 | Óscar Eduardo Peña Jiménez | `PEJO800525HDFXMS00` | 2224446678 | 25/05/1980 | Análisis sangre $380 | CONFIRMADO (cita +3 días 16:00, Puebla) |
+| 17 | Paola Fernanda Luna Herrera | `LUHP021011MDFNRL00` | 2225557789 | 11/10/2002 | Perfil tiroideo $620 | CONFIRMADO (cita +3 días 12:00, Tehuacán) |
+| 18 | Javier Alejandro Méndez Ortiz | `MEOJ890707HDFNRV00` | 2226668890 | 07/07/1989 | Radiografía tórax $450 | CONFIRMADO (cita +4 días 11:30, Puebla) |
+| 19 | Lucía Fernanda Aguilar Ramos | `AURL960321MDFGMC00` | 2227779901 | 21/03/1996 | Análisis sangre $380 | CONFIRMADO (cita +4 días 09:30, Tehuacán) |
+| 20 | Eduardo José Salazar Peña | `SAPE840909HDFLXD00` | 2228880012 | 09/09/1984 | Perfil tiroideo $620 | CONFIRMADO (cita +5 días 08:30, Puebla) |
 
 CURPs de demostración (formato válido, no reales; ver "Credenciales de prueba").
+
+Las citas de los usuarios 3 y 6–20 son **relativas al día del primer
+arranque** (mañana, +2 días, …): nunca se quedan en el pasado. Son citas
+CONFIRMADAS reales en la BD, así que **ocupan su hueco en la parrilla**
+para todos los usuarios: en Web, WhatsApp y Asesor esa hora sale
+deshabilitada y `confirmar` la rechaza con 409 si se intenta tomar.
+La cita de Carlos (usuario 4) quedó ATENDIDA, así que su hueco (mañana
+09:00, Puebla) vuelve a estar libre.
 
 Se siembran con Flyway `V2__seed.sql` + `V3__usuarios_ejemplo.sql` y con
 `DataSeeder` (idempotente, crea el trámite de cada uno en su estado).

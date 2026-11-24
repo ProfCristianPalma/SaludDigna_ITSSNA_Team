@@ -24,6 +24,11 @@ services:
       DB_USER: saluddigna
       DB_PASSWORD: saluddigna
       JWT_SECRET: salud-digna-demo-secret-cambiar-en-produccion
+      # Hora de México (America/Mexico_City): sin esto el contenedor corre
+      # en UTC y "hoy"/"mañana" y la validación de citas pasadas van 6 h
+      # adelantadas (a las 18:00 CST ya es mañana en UTC). El JDK trae su
+      # propia base de zonas, así que no hace falta tzdata en la imagen.
+      JAVA_TOOL_OPTIONS: -Duser.timezone=America/Mexico_City
     ports:
       - "8080:8080"
     depends_on:

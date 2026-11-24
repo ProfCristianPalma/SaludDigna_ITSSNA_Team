@@ -276,16 +276,29 @@ export function normalizeTramite(raw: Record<string, unknown>): Tramite {
   const clinicaId = toNumberId(raw.clinicaId as string | number);
   const estudioObj = raw.estudio as Estudio | undefined;
   const clinicaObj = raw.clinica as Clinica | null | undefined;
+  // El backend devuelve el tramite como entidad JPA (sin `estudio` ni
+  // `clinica` anidados) en POST /tramites, /cotizar, /seleccionar-clinica
+  // y /confirmar: aqui solo se rellena nombre/precio desde el mock, pero
+  // el id DEBE seguir siendo el numerico del backend. Antes se quedaba
+  // el id del mock ("est-001"/"cli-001") y la parrilla pedia
+  // estudioId=est-001: Spring no lo convierte a Long y devolvia 400
+  // ("No se pudo consultar la disponibilidad") al elegir la fecha.
+  const estudioMock = MOCK_ESTUDIOS[estudioId >= 1 && estudioId <= MOCK_ESTUDIOS.length ? estudioId - 1 : 0];
   const estudio: Estudio =
     estudioObj && estudioObj.nombre
       ? { id: String(estudioObj.id), nombre: estudioObj.nombre, precio: Number(estudioObj.precio), descripcion: estudioObj.descripcion }
-      : MOCK_ESTUDIOS[estudioId >= 1 && estudioId <= MOCK_ESTUDIOS.length ? estudioId - 1 : 0];
+      : Number.isNaN(estudioId)
+        ? estudioMock
+        : { ...estudioMock, id: String(estudioId) };
+  const clinicaMock = clinicaId >= 1 && clinicaId <= MOCK_CLINICAS.length ? MOCK_CLINICAS[clinicaId - 1] : null;
   const clinica: Clinica | null =
     clinicaObj && clinicaObj.nombre
       ? { id: String(clinicaObj.id), nombre: clinicaObj.nombre, ciudad: clinicaObj.ciudad, direccion: clinicaObj.direccion }
-      : clinicaId >= 1 && clinicaId <= MOCK_CLINICAS.length
-        ? MOCK_CLINICAS[clinicaId - 1]
-        : null;
+      : clinicaMock == null
+        ? null
+        : Number.isNaN(clinicaId)
+          ? clinicaMock
+          : { ...clinicaMock, id: String(clinicaId) };
   const pacienteRaw = raw.paciente as Paciente | undefined;
   const paciente: Paciente | undefined = pacienteRaw
     ? {
@@ -501,7 +514,9 @@ export async function getParrilla(
   exceptoTramiteId?: string,
 ): Promise<Parrilla> {
   const params = new URLSearchParams({ clinicaId, fecha: fechaISO });
-  if (estudioId) params.set('estudioId', estudioId);
+  // El backend espera un Long: un id no numerico (p. ej. un id de mock)
+  // daria 400. Sin estudioId valido, la parrilla usa duracion 30 min.
+  if (estudioId && /^\d+$/.test(estudioId)) params.set('estudioId', estudioId);
   if (exceptoTramiteId) params.set('exceptoTramiteId', exceptoTramiteId);
   return fetchJson<Parrilla>(`/disponibilidad/parrilla?${params.toString()}`);
 }

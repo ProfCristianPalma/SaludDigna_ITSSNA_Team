@@ -138,10 +138,23 @@ public class CanalController {
     /** "el 25": día del mes actual. */
     private static final Pattern FECHA_EL_DIA = Pattern.compile("\\bel\\s+(\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
 
-    /** Hora: "10:00", "a las 10", "10 h". */
-    private static final Pattern HORA_HHMM = Pattern.compile("(\\d{1,2}):(\\d{2})\\b");
-    private static final Pattern HORA_A_LAS = Pattern.compile("a\\s+las?\\s+(\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
-    private static final Pattern HORA_H = Pattern.compile("(\\d{1,2})\\s*h(?:oras?)?\\b", Pattern.CASE_INSENSITIVE);
+    /**
+     * Hora, tolerante: "10:00", "10.30", "10:00 am/pm", "a las 10",
+     * "las 10", "10 h", "10h30", "10 am", "10 pm" y un número suelto
+     * ("10", solo si TODO el mensaje es el número). Antes solo valían
+     * "HH:MM", "a las H" y "H h": cualquier otra hora que escribiera
+     * el usuario caía en "formato no válido" aunque fuera clara.
+     */
+    private static final Pattern HORA_COMPLETA = Pattern.compile(
+            "(\\d{1,2})[:.](\\d{2})\\s*(?:([ap])\\.?\\s*m\\.?)?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HORA_A_LAS = Pattern.compile(
+            "a\\s+las?\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(?:([ap])\\.?\\s*m\\.?)?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HORA_LAS = Pattern.compile(
+            "\\blas\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(?:([ap])\\.?\\s*m\\.?)?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HORA_H = Pattern.compile(
+            "(\\d{1,2})\\s*h(?:oras?)?\\s*(\\d{2})?\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HORA_AMPM = Pattern.compile(
+            "(\\d{1,2})\\s*([ap])\\.?\\s*m\\.?\\b", Pattern.CASE_INSENSITIVE);
 
     /** Formato en el que se le muestran las fechas al usuario: DD/MM/AAAA. */
     private static final DateTimeFormatter FORMATO_LATINO = DateTimeFormatter.ofPattern("dd/MM/yyyy");
@@ -230,29 +243,61 @@ public class CanalController {
         };
     }
 
-    /** Hora escrita en el mensaje ("10:00", "a las 10", "10 h"). Vacío si no hay hora o si es imposible (25:00). */
+    /** Hora 12h -> 24h: "10 pm" -> 22:00, "12 am" -> 00:00, "12 pm" -> 12:00. Sin am/pm, tal cual. Vacío si es imposible (25:00, 14 pm). */
+    private static Optional<LocalTime> horaConAmPm(int hora, int minuto, String ampm) {
+        try {
+            if (ampm != null) {
+                String a = ampm.toLowerCase();
+                if (hora < 1 || hora > 12) return Optional.empty();
+                if (a.equals("p") && hora != 12) hora += 12;
+                if (a.equals("a") && hora == 12) hora = 0;
+            }
+            return Optional.of(LocalTime.of(hora, minuto));
+        } catch (java.time.DateTimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Hora escrita en el mensaje ("10:00", "10.30", "10:00 am", "a las 10",
+     * "las 10", "10 h", "10h30", "10 am", "10"). Vacío si no hay hora o
+     * si es imposible (25:00, 10:75). Un número suelto solo vale si TODO
+     * el mensaje es el número ("folio 2" no es una hora: eso se resuelve
+     * antes, como selección de folio).
+     */
     private static Optional<LocalTime> extraerHora(String mensaje) {
         if (mensaje == null) return Optional.empty();
-        Matcher hhmm = HORA_HHMM.matcher(mensaje);
-        if (hhmm.find()) {
-            try {
-                return Optional.of(LocalTime.of(Integer.parseInt(hhmm.group(1)), Integer.parseInt(hhmm.group(2))));
-            } catch (java.time.DateTimeException e) {
-                return Optional.empty();
-            }
+        Matcher completa = HORA_COMPLETA.matcher(mensaje);
+        if (completa.find()) {
+            return horaConAmPm(Integer.parseInt(completa.group(1)), Integer.parseInt(completa.group(2)), completa.group(3));
         }
         Matcher aLas = HORA_A_LAS.matcher(mensaje);
         if (aLas.find()) {
+            int min = aLas.group(2) == null ? 0 : Integer.parseInt(aLas.group(2));
+            return horaConAmPm(Integer.parseInt(aLas.group(1)), min, aLas.group(3));
+        }
+        Matcher las = HORA_LAS.matcher(mensaje);
+        if (las.find()) {
+            int min = las.group(2) == null ? 0 : Integer.parseInt(las.group(2));
+            return horaConAmPm(Integer.parseInt(las.group(1)), min, las.group(3));
+        }
+        Matcher h = HORA_H.matcher(mensaje);
+        if (h.find()) {
+            int min = h.group(2) == null ? 0 : Integer.parseInt(h.group(2));
             try {
-                return Optional.of(LocalTime.of(Integer.parseInt(aLas.group(1)), 0));
+                return Optional.of(LocalTime.of(Integer.parseInt(h.group(1)), min));
             } catch (java.time.DateTimeException e) {
                 return Optional.empty();
             }
         }
-        Matcher h = HORA_H.matcher(mensaje);
-        if (h.find()) {
+        Matcher ampm = HORA_AMPM.matcher(mensaje);
+        if (ampm.find()) {
+            return horaConAmPm(Integer.parseInt(ampm.group(1)), 0, ampm.group(2));
+        }
+        String t = mensaje.trim().replaceAll("[.,;:]+$", "");
+        if (t.matches("\\d{1,2}")) {
             try {
-                return Optional.of(LocalTime.of(Integer.parseInt(h.group(1)), 0));
+                return Optional.of(LocalTime.of(Integer.parseInt(t), 0));
             } catch (java.time.DateTimeException e) {
                 return Optional.empty();
             }
@@ -263,7 +308,10 @@ public class CanalController {
     /** ¿El mensaje trae algo que parece una hora escrita? (para distinguir "hora imposible" de "no era una hora"). */
     private static boolean pareceHora(String mensaje) {
         if (mensaje == null) return false;
-        return HORA_HHMM.matcher(mensaje).find() || HORA_A_LAS.matcher(mensaje).find() || HORA_H.matcher(mensaje).find();
+        return HORA_COMPLETA.matcher(mensaje).find() || HORA_A_LAS.matcher(mensaje).find()
+                || HORA_LAS.matcher(mensaje).find() || HORA_H.matcher(mensaje).find()
+                || HORA_AMPM.matcher(mensaje).find()
+                || mensaje.trim().replaceAll("[.,;:]+$", "").matches("\\d{1,2}");
     }
 
     /** ¿El mensaje trae algo que parece fecha u hora? (fecha imposible u hora imposible, no "eso no era una fecha"). */
@@ -1067,36 +1115,107 @@ public class CanalController {
         Optional<LocalDateTime> fechaHoraOpt = extraerFechaHora(mensajeCrudo);
         if (fechaHoraOpt.isPresent()) {
             LocalDateTime fechaHora = fechaHoraOpt.get();
-            if (fechaHora.isBefore(LocalDateTime.now())) {
-                return Optional.of(new ResultadoBot("Esa fecha y hora ya pasaron (" + fechaHora.format(FORMATO_LATINO_HORA)
-                        + " es anterior a ahora). Dime otro día y hora para tu cita.",
-                        true, opcionesFechas(), tramite));
-            }
             if (extraerHora(mensajeCrudo).isEmpty()) {
-                return Optional.of(ofrecerHorasLibres(paciente, tramite, fechaHora.toLocalDate()));
-            }
-            Tramite actualizado;
-            try {
-                actualizado = tramites.confirmar(tramite.getId(), fechaHora);
-            } catch (ResponseStatusException e) {
-                if (e.getStatusCode() == HttpStatus.CONFLICT) {
-                    // confirmar ya trae las horas libres más cercanas
-                    // en el mensaje (409); se pasa tal cual.
-                    String motivo = e.getReason() != null ? e.getReason() : e.getMessage();
-                    return Optional.of(new ResultadoBot(motivo + " Dime otra fecha u hora.",
+                // Solo fecha, sin hora: se ofrecen las horas libres de ese
+                // día. El "pasado" solo se valida con hora real (abajo):
+                // "hoy" a las 15:00 no es pasado, quedan horas libres.
+                if (fechaHora.toLocalDate().isBefore(LocalDate.now())) {
+                    return Optional.of(new ResultadoBot("Ese día ya pasó (" + fechaHora.toLocalDate().format(FORMATO_LATINO)
+                            + "). Dime otro día en formato DD/MM/AAAA, o dime \"hoy\" o \"mañana\".",
                             true, opcionesFechas(), tramite));
                 }
-                String motivo = e.getReason() != null ? e.getReason() : e.getMessage();
-                return Optional.of(new ResultadoBot(motivo, true, opcionesFechas(), tramite));
+                return Optional.of(ofrecerHorasLibres(paciente, tramite, fechaHora.toLocalDate()));
             }
-            return Optional.of(new ResultadoBot("Confirmado " + nombre + ". Tu cita del trámite " + actualizado.getFolio()
-                    + " quedó para el " + fechaHora.format(FORMATO_LATINO_HORA) + " en " + nombreClinica(actualizado) + ". Te esperamos.",
-                    true, List.of("¿Cuándo es mi cita?", "Ayuda"), actualizado));
+            return Optional.of(confirmarFechaHora(paciente, tramite, fechaHora));
+        }
+        // Solo la hora, sin fecha ("10", "10:00", "a las 10", "10 am"):
+        // se usa el día que el bot ofreció por último (queda guardado
+        // en el log como evento horas.ofrecidas). Sin día ofrecido, se
+        // pide la fecha con ejemplo, no un "formato no válido".
+        Optional<LocalTime> horaSola = extraerHora(mensajeCrudo);
+        if (horaSola.isPresent()) {
+            Optional<LocalDate> fechaOfrecida = fechaOfrecidaReciente(tramite.getId());
+            if (fechaOfrecida.isPresent()) {
+                return Optional.of(confirmarFechaHora(paciente, tramite,
+                        LocalDateTime.of(fechaOfrecida.get(), horaSola.get())));
+            }
+            return Optional.of(new ResultadoBot("¿Para qué día quieres la cita a las "
+                    + horaSola.get().format(FORMATO_HORA) + "? Dime la fecha en formato DD/MM/AAAA "
+                    + "(por ejemplo " + manana() + " " + horaSola.get().format(FORMATO_HORA)
+                    + "), o dime \"hoy\" o \"mañana\".",
+                    true, opcionesFechas(), tramite));
         }
         if (pareceFechaHora(mensajeCrudo)) {
             return Optional.of(new ResultadoBot("Esa fecha u hora no existe o no la pude leer (" + mensajeCrudo.trim() + "). "
-                    + "Escríbela en formato DD/MM/AAAA con hora, por ejemplo " + manana() + " 10:00, o dime \"hoy\" o \"mañana\".",
+                    + "Escríbela en formato DD/MM/AAAA con hora, por ejemplo " + manana() + " 10:00, "
+                    + "o dime solo la hora (por ejemplo 10:00) si ya te ofrecí las horas de un día, "
+                    + "o dime \"hoy\" o \"mañana\".",
                     true, opcionesFechas(), tramite));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Confirma la cita en la fecha+hora dadas: pasado (400) se dice
+     * claro; ocupada (409) pasa el mensaje del backend con las horas
+     * libres cercanas; hora fuera de la parrilla (400) se responde con
+     * las horas libres cercanas de ese día (antes era solo el mensaje
+     * de la parrilla, sin alternativas). Éxito: confirmación con folio,
+     * fecha/hora y clínica.
+     */
+    private ResultadoBot confirmarFechaHora(Paciente paciente, Tramite tramite, LocalDateTime fechaHora) {
+        String nombre = paciente.getNombre().split(" ")[0];
+        if (fechaHora.isBefore(LocalDateTime.now())) {
+            return new ResultadoBot("Esa fecha y hora ya pasaron (" + fechaHora.format(FORMATO_LATINO_HORA)
+                    + " es anterior a ahora). Dime otro día y hora para tu cita.",
+                    true, opcionesFechas(), tramite);
+        }
+        Tramite actualizado;
+        try {
+            actualizado = tramites.confirmar(tramite.getId(), fechaHora);
+        } catch (ResponseStatusException e) {
+            String motivo = e.getReason() != null ? e.getReason() : e.getMessage();
+            if (e.getStatusCode() == HttpStatus.CONFLICT) {
+                // confirmar ya trae las horas libres más cercanas
+                // en el mensaje (409); se pasa tal cual.
+                return new ResultadoBot(motivo + " Dime otra fecha u hora.", true, opcionesFechas(), tramite);
+            }
+            if (e.getStatusCode() == HttpStatus.BAD_REQUEST && motivo != null && motivo.contains("parrilla")) {
+                List<String> cercanas = tramites.horasLibresCercanas(tramite.getClinicaId(), fechaHora.toLocalDate(),
+                        fechaHora.toLocalTime(), tramite.getEstudioId(), tramite.getId());
+                String detalle = cercanas.isEmpty()
+                        ? "Ese día ya no quedan horas libres en " + nombreClinica(tramite) + "."
+                        : "Horas libres cercanas ese día: " + String.join(", ", cercanas) + ".";
+                return new ResultadoBot(motivo + " " + detalle + " Dime otra hora.", true, opcionesFechas(), tramite);
+            }
+            return new ResultadoBot(motivo, true, opcionesFechas(), tramite);
+        }
+        return new ResultadoBot("Confirmado " + nombre + ". Tu cita del trámite " + actualizado.getFolio()
+                + " quedó para el " + fechaHora.format(FORMATO_LATINO_HORA) + " en " + nombreClinica(actualizado) + ". Te esperamos.",
+                true, List.of("¿Cuándo es mi cita?", "Ayuda"), actualizado);
+    }
+
+    /**
+     * Último día para el que el bot ofreció horas libres en este
+     * trámite (evento horas.ofrecidas del log, el más reciente): así
+     * una hora suelta después ("10", "10:00") se entiende para ese
+     * día. Vacío si nunca se ofrecieron horas en este trámite.
+     */
+    private Optional<LocalDate> fechaOfrecidaReciente(UUID tramiteId) {
+        List<mx.saluddigna.omnicanal.eventos.domain.Evento> timeline = eventos.listarTimeline(tramiteId);
+        for (int i = timeline.size() - 1; i >= 0; i--) {
+            mx.saluddigna.omnicanal.eventos.domain.Evento ev = timeline.get(i);
+            if (!TipoEvento.HORAS_OFRECIDAS.equals(ev.getTipo())) continue;
+            String payload = ev.getPayload() == null ? "" : ev.getPayload();
+            Matcher m = Pattern.compile("\"fecha\"\\s*:\\s*\"(\\d{4}-\\d{2}-\\d{2})\"").matcher(payload);
+            if (m.find()) {
+                try {
+                    return Optional.of(LocalDate.parse(m.group(1)));
+                } catch (java.time.DateTimeException e) {
+                    return Optional.empty();
+                }
+            }
+            return Optional.empty();
         }
         return Optional.empty();
     }
@@ -1117,6 +1236,10 @@ public class CanalController {
                     + ". Dime otro día en formato DD/MM/AAAA, o dime \"mañana\".",
                     true, opcionesFechas(), tramite);
         }
+        // El día ofrecido queda en el log: si el usuario responde solo
+        // con la hora ("10", "10:00"), se entiende para este día.
+        eventos.registrar(tramite.getId(), TipoEvento.HORAS_OFRECIDAS, "WHATSAPP", "SISTEMA",
+                "{\"fecha\":\"" + fecha + "\"}");
         String fechaHoraEjemplo = fechaTexto + " " + libres.get(0);
         List<String> opciones = new ArrayList<>();
         for (String hora : libres) {

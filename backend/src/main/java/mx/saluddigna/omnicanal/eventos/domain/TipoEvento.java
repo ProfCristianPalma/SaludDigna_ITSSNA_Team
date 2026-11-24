@@ -23,6 +23,9 @@ public final class TipoEvento {
     public static final String PACIENTE_ACTUALIZADO = "paciente.actualizado";
     /** Un asesor/admin restableció la contraseña del paciente (el payload NUNCA lleva la contraseña). */
     public static final String PASSWORD_RESTABLECIDA = "password.restablecida";
+    /** El bot ofreció las horas libres de un día (payload {"fecha":"AAAA-MM-DD"}):
+     * así una hora suelta después ("10", "10:00") se entiende para ese día. */
+    public static final String HORAS_OFRECIDAS = "horas.ofrecidas";
 
     private TipoEvento() {
     }

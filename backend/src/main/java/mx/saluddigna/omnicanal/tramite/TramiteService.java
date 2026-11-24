@@ -235,10 +235,15 @@ public class TramiteService {
     @Transactional(readOnly = true)
     public List<ParrillaSlot> parrilla(Long clinicaId, LocalDate fecha, Long estudioId, UUID exceptoTramiteId) {
         List<Cita> confirmadas = citasConfirmadasDelDia(clinicaId, fecha, exceptoTramiteId);
+        // Un hueco que ya pasó hoy no se puede reservar (confirmar lo
+        // rechazaría con 400): se marca ocupado para no ofrecerlo.
+        LocalDateTime ahora = LocalDateTime.now();
+        boolean esHoy = fecha.equals(ahora.toLocalDate());
         List<ParrillaSlot> slots = new ArrayList<>();
         for (LocalTime hora = APERTURA; hora.isBefore(CIERRE); hora = hora.plusMinutes(DURACION_SLOT_MIN)) {
             LocalDateTime inicioSlot = fecha.atTime(hora);
-            boolean ocupado = confirmadas.stream().anyMatch(c ->
+            boolean ocupado = (esHoy && inicioSlot.isBefore(ahora))
+                    || confirmadas.stream().anyMatch(c ->
                     solapan(inicioSlot, DURACION_SLOT_MIN, c.getFechaHora(), duracionDeCita(c)));
             slots.add(new ParrillaSlot(hora.format(FORMATO_HORA), ocupado));
         }

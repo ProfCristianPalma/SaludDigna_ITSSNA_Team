@@ -33,6 +33,9 @@ import org.springframework.transaction.annotation.Transactional;
  * - Maria Fernanda Ruiz   2224445566  RUXF920809MDFZXR02  CONFIRMADO (cita al dia siguiente, 10:00) (maria123)
  * - Carlos Mendoza Vega   2387778899  MEVC781130HDFNGR03  ATENDIDO              (carlos123)
  * - Fernanda Lopez Diaz   2229990011  LODF010617MDFPZR04  DATOS_PENDIENTES      (fernanda123)
+ * Más 15 usuarios con cita CONFIRMADA próxima y variada (estudio, día
+ * y hora distintos, en las dos clínicas), para que la parrilla muestre
+ * huecos ocupados en varios días (ver citaConfirmada).
  * Contraseñas demo = primer nombre en minúsculas + 123, guardadas como
  * hash PBKDF2 (nunca en texto plano). Si el paciente ya tiene hash, no se pisa.
  * Las CURPs son DE DEMOSTRACIÓN (formato válido, derivadas del nombre,
@@ -131,6 +134,47 @@ public class DataSeeder implements CommandLineRunner {
             Tramite t = tramiteService.crearTramite(fernanda.getId(), null, Canal.WEB.name());
             tramiteService.marcarDatosPendientes(t.getId(), Map.of("curp", "Pendiente: CURP", "ordenMedica", "Pendiente: orden medica"));
         }
+
+        // 6-20. Quince usuarios más, cada uno con una cita CONFIRMADA
+        // próxima y variada (estudio, día y hora distintos, en las dos
+        // clínicas), para que la parrilla muestre huecos ocupados en
+        // varios días y ningún otro usuario pueda tomarlos (confirmar
+        // rechaza los solapes con 409). Fechas RELATIVAS (plusDays):
+        // una fecha fija se vuelve pasado y tumba el arranque.
+        // Día +1 (25/11, día del cierre): 5 citas.
+        citaConfirmada(paciente("Jorge Alberto Mendoza Ruiz", "2223334455", "jorge.demo@saluddigna.test", LocalDate.of(1988, 3, 15), "jorge123", "MERJ880315HDFNZR00"),
+                ultrasonido, puebla, 1, 8, 0);
+        citaConfirmada(paciente("Sofia Isabel Herrera Gomez", "2224446677", "sofia.demo@saluddigna.test", LocalDate.of(1995, 7, 22), "sofia123", "HEGS950722MDFRMF00"),
+                tiroideo, puebla, 1, 9, 30);
+        citaConfirmada(paciente("Diego Alejandro Torres Sanchez", "2225557788", "diego.demo@saluddigna.test", LocalDate.of(1990, 1, 8), "diego123", "TOSD900108HDFRNG00"),
+                radiografia, tehuacan, 1, 8, 30);
+        citaConfirmada(paciente("Valeria Nicole Ortiz Medina", "2226668899", "valeria.demo@saluddigna.test", LocalDate.of(1998, 11, 30), "valeria123", "ORMV981130MDFTDL00"),
+                analisis, tehuacan, 1, 11, 0);
+        citaConfirmada(paciente("Ricardo Emmanuel Vargas Leon", "2227779900", "ricardo.demo@saluddigna.test", LocalDate.of(1983, 6, 5), "ricardo123", "VALR830605HDFRNC00"),
+                radiografia, puebla, 1, 14, 0);
+        // Día +2 (26/11): 3 citas.
+        citaConfirmada(paciente("Camila Fernanda Reyes Morales", "2228880011", "camila.demo@saluddigna.test", LocalDate.of(1997, 2, 14), "camila123", "REMC970214MDFYRM00"),
+                ultrasonido, tehuacan, 2, 9, 0);
+        citaConfirmada(paciente("Andres Felipe Cruz Navarro", "2229991122", "andres.demo@saluddigna.test", LocalDate.of(1991, 9, 19), "andres123", "CUNA910919HDFRVN00"),
+                analisis, puebla, 2, 10, 0);
+        citaConfirmada(paciente("Mariana Guadalupe Flores Diaz", "2221113344", "mariana.demo@saluddigna.test", LocalDate.of(1993, 4, 27), "mariana123", "FODM930427MDFLZR00"),
+                tiroideo, tehuacan, 2, 15, 30);
+        // Día +3 (27/11): 4 citas.
+        citaConfirmada(paciente("Miguel Angel Soto Ramirez", "2222224455", "miguel.demo@saluddigna.test", LocalDate.of(1986, 12, 3), "miguel123", "SORM861203HDFTMG00"),
+                ultrasonido, puebla, 3, 10, 0);
+        citaConfirmada(paciente("Daniela Alejandra Vega Castillo", "2223335566", "daniela.demo@saluddigna.test", LocalDate.of(1999, 8, 16), "daniela123", "VECD990816MDFGSN00"),
+                radiografia, tehuacan, 3, 10, 30);
+        citaConfirmada(paciente("Oscar Eduardo Pena Jimenez", "2224446678", "oscar.demo@saluddigna.test", LocalDate.of(1980, 5, 25), "oscar123", "PEJO800525HDFXMS00"),
+                analisis, puebla, 3, 16, 0);
+        citaConfirmada(paciente("Paola Fernanda Luna Herrera", "2225557789", "paola.demo@saluddigna.test", LocalDate.of(2002, 10, 11), "paola123", "LUHP021011MDFNRL00"),
+                tiroideo, tehuacan, 3, 12, 0);
+        // Día +4 (28/11): 2 citas. Día +5 (29/11): 1 cita.
+        citaConfirmada(paciente("Javier Alejandro Mendez Ortiz", "2226668890", "javier.demo@saluddigna.test", LocalDate.of(1989, 7, 7), "javier123", "MEOJ890707HDFNRV00"),
+                radiografia, puebla, 4, 11, 30);
+        citaConfirmada(paciente("Lucia Fernanda Aguilar Ramos", "2227779901", "lucia.demo@saluddigna.test", LocalDate.of(1996, 3, 21), "lucia123", "AURL960321MDFGMC00"),
+                analisis, tehuacan, 4, 9, 30);
+        citaConfirmada(paciente("Eduardo Jose Salazar Pena", "2228880012", "eduardo.demo@saluddigna.test", LocalDate.of(1984, 9, 9), "eduardo123", "SAPE840909HDFLXD00"),
+                tiroideo, puebla, 5, 8, 30);
     }
 
     /**
@@ -191,5 +235,19 @@ public class DataSeeder implements CommandLineRunner {
         }
         Tramite demo = tramiteService.crearTramite(paciente.getId(), estudio.getId(), Canal.WEB.name());
         return tramiteService.cotizar(demo.getId(), estudio.getId());
+    }
+
+    /**
+     * Cita semilla CONFIRMADA en fecha relativa (hoy + `dias`) y hora
+     * de parrilla (07:00–16:30, múltiplos de 30). Idempotente: si el
+     * trámite ya está CONFIRMADO (de un arranque anterior) no se vuelve
+     * a tocar; si quedó COTIZADO, se elige clínica y se confirma.
+     */
+    private void citaConfirmada(Paciente paciente, Estudio estudio, Clinica clinica, int dias, int hora, int minuto) {
+        Tramite t = tramiteCotizado(paciente, estudio);
+        if (t != null && t.getEstado().name().equals("COTIZADO")) {
+            tramiteService.seleccionarClinica(t.getId(), clinica.getId());
+            tramiteService.confirmar(t.getId(), LocalDate.now().plusDays(dias).atTime(hora, minuto));
+        }
     }
 }
