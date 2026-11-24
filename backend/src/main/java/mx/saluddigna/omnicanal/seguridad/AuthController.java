@@ -3,11 +3,11 @@ package mx.saluddigna.omnicanal.seguridad;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.identidad.PacienteRepository;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
+import mx.saluddigna.omnicanal.seguridad.domain.UsuarioStaff;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,8 +27,10 @@ import org.springframework.web.server.ResponseStatusException;
  * "pacienteId" para que la App sepa quién está logueado sin pedir el
  * teléfono a mano.
  *
- * El staff (asesor/admin) sigue siendo de demo en código, como antes,
- * porque no hay tabla de usuarios staff en esta entrega.
+ * El staff (asesor/admin) vive en Postgres, tabla
+ * {@code usuarios_staff} (migración V6), sembrado por DataSeeder y
+ * gestionado con el CRUD de /api/admin/staff. Su contraseña también
+ * es hash PBKDF2 y su rol sale de la BD.
  *
  * Usuarios demo:
  * - Pacientes en BD: teléfono a 10 dígitos + contraseña (ej. 2220000001 / ana123)
@@ -39,18 +41,17 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/auth")
 public class AuthController {
 
-    private static final Map<String, String[]> USUARIOS_STAFF = Map.of(
-            "asesor", new String[]{"asesor123", "ASESOR"},
-            "admin", new String[]{"admin123", "ADMINISTRADOR"});
-
     private final JwtService jwtService;
     private final PasswordService passwords;
     private final PacienteRepository pacientes;
+    private final UsuarioStaffRepository staff;
 
-    public AuthController(JwtService jwtService, PasswordService passwords, PacienteRepository pacientes) {
+    public AuthController(JwtService jwtService, PasswordService passwords,
+                          PacienteRepository pacientes, UsuarioStaffRepository staff) {
         this.jwtService = jwtService;
         this.passwords = passwords;
         this.pacientes = pacientes;
+        this.staff = staff;
     }
 
     public record LoginRequest(String usuario, String password, String rol) {
@@ -79,16 +80,18 @@ public class AuthController {
         }
         String usuario = req.usuario().trim();
 
-        // (c) Staff demo en código, como hasta ahora (sin paciente).
-        String[] staff = USUARIOS_STAFF.get(usuario.toLowerCase());
-        if (staff != null) {
-            if (!staff[0].equals(req.password())) {
+        // (c) Staff en Postgres (tabla usuarios_staff, V6): usuario en
+        // minúsculas, contraseña verificada contra el hash PBKDF2 y rol
+        // desde la BD. Sin paciente (null).
+        Optional<UsuarioStaff> cuentaStaff = staff.findByUsuario(usuario.toLowerCase());
+        if (cuentaStaff.isPresent()) {
+            UsuarioStaff cuenta = cuentaStaff.get();
+            if (!passwords.verificar(req.password(), cuenta.getPasswordHash())) {
                 throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Usuario o contraseña incorrectos");
             }
-            String rol = staff[1];
-            validarRolPedido(req.rol(), rol);
-            return new AuthResponse(jwtService.generarToken(usuario.toLowerCase(), rol),
-                    usuario.toLowerCase(), rol, null);
+            validarRolPedido(req.rol(), cuenta.getRol());
+            return new AuthResponse(jwtService.generarToken(cuenta.getUsuario(), cuenta.getRol()),
+                    cuenta.getUsuario(), cuenta.getRol(), null);
         }
 
         // (a) y (b) Paciente en BD: por teléfono, o por primer nombre ("ana").

@@ -13,6 +13,8 @@ import mx.saluddigna.omnicanal.eventos.domain.Canal;
 import mx.saluddigna.omnicanal.identidad.PacienteRepository;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
 import mx.saluddigna.omnicanal.seguridad.PasswordService;
+import mx.saluddigna.omnicanal.seguridad.UsuarioStaffRepository;
+import mx.saluddigna.omnicanal.seguridad.domain.UsuarioStaff;
 import mx.saluddigna.omnicanal.tramite.TramiteRepository;
 import mx.saluddigna.omnicanal.tramite.TramiteService;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
@@ -44,21 +46,29 @@ public class DataSeeder implements CommandLineRunner {
     private final TramiteRepository tramites;
     private final TramiteService tramiteService;
     private final PasswordService passwords;
+    private final UsuarioStaffRepository staff;
 
     public DataSeeder(PacienteRepository pacientes, EstudioRepository estudios,
                       ClinicaRepository clinicas, TramiteRepository tramites,
-                      TramiteService tramiteService, PasswordService passwords) {
+                      TramiteService tramiteService, PasswordService passwords,
+                      UsuarioStaffRepository staff) {
         this.pacientes = pacientes;
         this.estudios = estudios;
         this.clinicas = clinicas;
         this.tramites = tramites;
         this.tramiteService = tramiteService;
         this.passwords = passwords;
+        this.staff = staff;
     }
 
     @Override
     @Transactional
     public void run(String... args) {
+        // Personal en Postgres (tabla usuarios_staff, V6): si no existe,
+        // se crea con hash PBKDF2; si ya existe, no se pisa (idempotente).
+        usuarioStaff("Administrador", "admin", "admin123", "ADMINISTRADOR");
+        usuarioStaff("Asesor Call Center", "asesor", "asesor123", "ASESOR");
+
         if (estudios.count() == 0) {
             estudios.saveAll(List.of(
                     new Estudio("Ultrasonido abdominal", "Ultrasonido de abdomen completo", new BigDecimal("850.00"), 30),
@@ -113,6 +123,20 @@ public class DataSeeder implements CommandLineRunner {
             Tramite t = tramiteService.crearTramite(fernanda.getId(), null, Canal.WEB.name());
             tramiteService.marcarDatosPendientes(t.getId(), Map.of("curp", "Pendiente: CURP", "ordenMedica", "Pendiente: orden medica"));
         }
+    }
+
+    /**
+     * Cuenta de personal: la crea si no existe (con hash PBKDF2); si ya
+     * existe sin hash, se lo asigna; si ya tiene hash, NO lo pisa.
+     */
+    private UsuarioStaff usuarioStaff(String nombre, String usuario, String password, String rol) {
+        UsuarioStaff u = staff.findByUsuario(usuario)
+                .orElseGet(() -> staff.save(new UsuarioStaff(nombre, usuario, "", rol)));
+        if (u.getPasswordHash() == null || u.getPasswordHash().isBlank()) {
+            u.setPasswordHash(passwords.hash(password));
+            u = staff.save(u);
+        }
+        return u;
     }
 
     /**

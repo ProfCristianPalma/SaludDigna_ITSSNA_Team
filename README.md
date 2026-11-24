@@ -227,6 +227,31 @@ Endpoints: `GET /api/admin/usuarios`, `POST /api/admin/usuarios`,
 `PUT /api/admin/usuarios/{id}`, `DELETE /api/admin/usuarios/{id}`
 (responde `{"foliosEliminados": N}`).
 
+### Personal — cuentas de acceso (tabla usuarios_staff, V6)
+
+En la misma página `/admin/usuarios`, segunda sección, va el CRUD de
+las cuentas del personal (asesor y admin). Antes vivían hardcodeadas
+en `AuthController` (contraseñas en texto plano en el código, fuera de
+la BD y sin CRUD); ahora viven en Postgres y el login las consulta
+ahí (usuario en minúsculas, hash PBKDF2, rol desde la BD).
+
+- **Siembra inicial:** DataSeeder crea `admin` (Administrador,
+  `admin123`, ADMINISTRADOR) y `asesor` (Asesor Call Center,
+  `asesor123`, ASESOR) si no existen, con hash PBKDF2. Si ya existen,
+  no se pisan.
+- **Lista:** usuario, nombre, rol y fecha de creación. La contraseña
+  **nunca se muestra ni se devuelve por la API**: el DTO no lleva
+  `password_hash`.
+- **Crear:** nombre, usuario único, contraseña (mínimo 6, hash PBKDF2)
+  y rol ASESOR o ADMINISTRADOR. 409 si el usuario ya existe.
+- **Editar:** nombre, usuario y rol; la contraseña solo se cambia si
+  se escribe una nueva. 409 si el usuario choca con otra cuenta.
+- **Borrar:** con confirmación. 409 si es el último ADMINISTRADOR o
+  si es tu propia cuenta (la del JWT).
+
+Endpoints: `GET /api/admin/staff`, `POST /api/admin/staff`,
+`PUT /api/admin/staff/{id}`, `DELETE /api/admin/staff/{id}`.
+
 ## Usuarios ejemplo (5, en la BD de Postgres y en el mock)
 
 | # | Paciente | Teléfono | Nac. | Estudio | Estado |
@@ -396,6 +421,10 @@ lecturas de trámites no inventan datos, avisan que no se guardó nada.
 | POST | `/api/admin/usuarios` | Crear usuario (409 si el teléfono ya existe) |
 | PUT | `/api/admin/usuarios/{id}` | Editar usuario (la contraseña solo cambia si se envía una nueva) |
 | DELETE | `/api/admin/usuarios/{id}` | Borrar usuario con sus folios, citas y eventos (`{"foliosEliminados": N}`) |
+| GET | `/api/admin/staff` | Cuentas del personal, sin password_hash (solo por URL en el front) |
+| POST | `/api/admin/staff` | Crear cuenta de personal (409 si el usuario ya existe) |
+| PUT | `/api/admin/staff/{id}` | Editar cuenta (la contraseña solo cambia si se envía una nueva) |
+| DELETE | `/api/admin/staff/{id}` | Borrar cuenta (409 si es el último admin o tu propia cuenta) |
 | POST | `/api/tramites` | Crear trámite |
 | GET | `/api/tramites/{id}` | Trámite + estado actual (UUID) |
 | GET | `/api/tramites/folio/{folio}` | Trámite por folio (ej. SD-2026-0001) |
@@ -435,7 +464,7 @@ SaludDigna_ITSSNA_Team/
 
 - El premio de $30,000 del primer lugar está condicionado a firmar la cesión
   de todos los derechos de PI a Salud Digna A.C. (ver PDF del reto).
-- La autenticación de pacientes es real contra Postgres (hash PBKDF2 en
-  `password_hash`, JWT con `pacienteId`); solo el staff (`asesor`/`admin`)
-  sigue siendo de demo en código. El fallback `X-Rol` es solo para el
-  hackatón; no usar en producción.
+- La autenticación es real contra Postgres (hash PBKDF2 en
+  `password_hash`, JWT con `pacienteId` para pacientes y con rol para
+  el staff, tabla `usuarios_staff` sembrada por DataSeeder). El
+  fallback `X-Rol` es solo para el hackatón; no usar en producción.

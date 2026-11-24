@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  actualizarStaffAdmin,
   actualizarUsuarioAdmin,
+  crearStaffAdmin,
   crearUsuarioAdmin,
+  eliminarStaffAdmin,
   eliminarUsuarioAdmin,
+  getStaffAdmin,
   getUsuariosAdmin,
   isApiError,
   normalizarTelefono,
 } from '../api';
-import type { UsuarioAdmin, UsuarioAdminInput } from '../api';
+import type { StaffAdmin, StaffAdminInput, UsuarioAdmin, UsuarioAdminInput } from '../api';
 import VistaPersonal from '../components/VistaPersonal';
 
 // Administración de usuarios: SOLO se entra escribiendo la URL
@@ -39,6 +43,18 @@ function ContenidoAdminUsuarios() {
   const [password, setPassword] = useState('');
   const [guardando, setGuardando] = useState(false);
 
+  // Personal — cuentas de acceso (tabla usuarios_staff, V6).
+  const [staff, setStaff] = useState<StaffAdmin[]>([]);
+  const [cargandoStaff, setCargandoStaff] = useState(true);
+  const [mensajeStaff, setMensajeStaff] = useState('');
+  const [errorStaff, setErrorStaff] = useState('');
+  const [editandoStaffId, setEditandoStaffId] = useState<string | null>(null);
+  const [staffNombre, setStaffNombre] = useState('');
+  const [staffUsuario, setStaffUsuario] = useState('');
+  const [staffRol, setStaffRol] = useState('ASESOR');
+  const [staffPassword, setStaffPassword] = useState('');
+  const [guardandoStaff, setGuardandoStaff] = useState(false);
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setError('');
@@ -58,6 +74,26 @@ function ContenidoAdminUsuarios() {
   useEffect(() => {
     void cargar();
   }, [cargar]);
+
+  const cargarStaff = useCallback(async () => {
+    setCargandoStaff(true);
+    setErrorStaff('');
+    try {
+      setStaff(await getStaffAdmin());
+    } catch (err) {
+      setErrorStaff(
+        isApiError(err)
+          ? `No se pudo cargar el personal (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se pudo cargar el personal. Revisa que el backend esté arriba.',
+      );
+    } finally {
+      setCargandoStaff(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargarStaff();
+  }, [cargarStaff]);
 
   function limpiarFormulario() {
     setEditandoId(null);
@@ -139,6 +175,88 @@ function ContenidoAdminUsuarios() {
       await cargar();
     } catch (err) {
       setError(
+        isApiError(err)
+          ? `No se pudo borrar (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se borró nada. Revisa que el backend esté arriba.',
+      );
+    }
+  }
+
+  function limpiarFormularioStaff() {
+    setEditandoStaffId(null);
+    setStaffNombre('');
+    setStaffUsuario('');
+    setStaffRol('ASESOR');
+    setStaffPassword('');
+  }
+
+  function empezarCrearStaff() {
+    limpiarFormularioStaff();
+    setMensajeStaff('');
+  }
+
+  function empezarEditarStaff(s: StaffAdmin) {
+    setEditandoStaffId(s.id);
+    setStaffNombre(s.nombre);
+    setStaffUsuario(s.usuario);
+    setStaffRol(s.rol);
+    setStaffPassword('');
+    setMensajeStaff('');
+  }
+
+  async function handleGuardarStaff(e: React.FormEvent) {
+    e.preventDefault();
+    setMensajeStaff('');
+    setErrorStaff('');
+    if (staffPassword.length > 0 && staffPassword.length < 6) {
+      setErrorStaff('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+    if (!editandoStaffId && staffPassword.length < 6) {
+      setErrorStaff('La contraseña es obligatoria al crear una cuenta (mínimo 6 caracteres).');
+      return;
+    }
+    const input: StaffAdminInput = {
+      nombre: staffNombre.trim(),
+      usuario: staffUsuario.trim().toLowerCase(),
+      rol: staffRol,
+      password: staffPassword || undefined,
+    };
+    setGuardandoStaff(true);
+    try {
+      if (editandoStaffId) {
+        await actualizarStaffAdmin(editandoStaffId, input);
+        setMensajeStaff(`Cuenta ${input.usuario} actualizada y guardada en la base de datos.`);
+      } else {
+        await crearStaffAdmin(input);
+        setMensajeStaff(`Cuenta ${input.usuario} creada y guardada en la base de datos.`);
+      }
+      limpiarFormularioStaff();
+      await cargarStaff();
+    } catch (err) {
+      setErrorStaff(
+        isApiError(err)
+          ? `No se pudo guardar (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se guardó nada. Revisa que el backend esté arriba.',
+      );
+    } finally {
+      setGuardandoStaff(false);
+    }
+  }
+
+  async function handleEliminarStaff(s: StaffAdmin) {
+    const confirmar = window.confirm(
+      `¿Borrar la cuenta ${s.usuario} (${s.nombre}, ${s.rol})?\n\nEsto no se puede deshacer.`,
+    );
+    if (!confirmar) return;
+    setMensajeStaff('');
+    setErrorStaff('');
+    try {
+      await eliminarStaffAdmin(s.id);
+      setMensajeStaff(`Cuenta ${s.usuario} borrada de la base de datos.`);
+      await cargarStaff();
+    } catch (err) {
+      setErrorStaff(
         isApiError(err)
           ? `No se pudo borrar (HTTP ${err.status}: ${err.message}).`
           : 'El backend no respondió, no se borró nada. Revisa que el backend esté arriba.',
@@ -267,6 +385,108 @@ function ContenidoAdminUsuarios() {
           </table>
         </section>
       )}
+
+      <section className="card" style={{ marginTop: 16 }}>
+        <h2>Personal — cuentas de acceso</h2>
+        <p className="muted">
+          Cuentas de asesor y admin guardadas en Postgres (tabla usuarios_staff, migración V6).
+          La contraseña nunca se muestra ni se devuelve por la API: solo se escribe al crear
+          la cuenta o al cambiarla. No se puede borrar al último administrador ni tu propia cuenta.
+        </p>
+
+        {mensajeStaff && <p className="notice" role="status">{mensajeStaff}</p>}
+        {errorStaff && <p className="notice" role="alert">{errorStaff}</p>}
+
+        <div className="actions" style={{ marginBottom: 16 }}>
+          <button type="button" className="btn btn-secondary" onClick={() => void cargarStaff()} disabled={cargandoStaff}>
+            Actualizar
+          </button>
+          <button type="button" className="btn btn-primary" onClick={empezarCrearStaff}>
+            Nueva cuenta
+          </button>
+        </div>
+
+        <h3>{editandoStaffId ? 'Editar cuenta' : 'Crear cuenta'}</h3>
+        <form onSubmit={handleGuardarStaff} className="form">
+          <label>
+            Nombre
+            <input value={staffNombre} onChange={(e) => setStaffNombre(e.target.value)} required />
+          </label>
+          <label>
+            Usuario
+            <input
+              value={staffUsuario}
+              onChange={(e) => setStaffUsuario(e.target.value)}
+              placeholder="asesor"
+              required
+            />
+          </label>
+          <label>
+            Rol
+            <select value={staffRol} onChange={(e) => setStaffRol(e.target.value)}>
+              <option value="ASESOR">Asesor</option>
+              <option value="ADMINISTRADOR">Administrador</option>
+            </select>
+          </label>
+          <label>
+            Contraseña {editandoStaffId ? '(dejar vacía para no cambiarla)' : '(mínimo 6 caracteres)'}
+            <input
+              type="password"
+              value={staffPassword}
+              onChange={(e) => setStaffPassword(e.target.value)}
+              placeholder={editandoStaffId ? 'Sin cambio' : 'Mínimo 6 caracteres'}
+              autoComplete="new-password"
+            />
+          </label>
+          <div className="actions">
+            <button type="submit" className="btn btn-primary" disabled={guardandoStaff}>
+              {guardandoStaff ? 'Guardando…' : editandoStaffId ? 'Guardar cambios' : 'Crear cuenta'}
+            </button>
+            {editandoStaffId && (
+              <button type="button" className="btn btn-secondary" onClick={limpiarFormularioStaff}>
+                Cancelar edición
+              </button>
+            )}
+          </div>
+        </form>
+
+        {cargandoStaff && staff.length === 0 && <p className="muted">Cargando personal…</p>}
+        {!cargandoStaff && staff.length === 0 && <p className="muted">No hay cuentas de personal.</p>}
+
+        {staff.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left' }}>Usuario</th>
+                <th style={{ textAlign: 'left' }}>Nombre</th>
+                <th style={{ textAlign: 'left' }}>Rol</th>
+                <th style={{ textAlign: 'left' }}>Creada</th>
+                <th style={{ textAlign: 'left' }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {staff.map((s) => (
+                <tr key={s.id}>
+                  <td>{s.usuario}</td>
+                  <td>{s.nombre}</td>
+                  <td>{s.rol}</td>
+                  <td>{s.createdAt ? s.createdAt.slice(0, 10) : '—'}</td>
+                  <td>
+                    <div className="actions">
+                      <button type="button" className="btn btn-small" onClick={() => empezarEditarStaff(s)}>
+                        Editar
+                      </button>
+                      <button type="button" className="btn btn-small" onClick={() => void handleEliminarStaff(s)}>
+                        Borrar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
     </div>
   );
 }

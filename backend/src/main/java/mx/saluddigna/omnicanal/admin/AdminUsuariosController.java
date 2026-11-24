@@ -19,8 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * CRUD de usuarios, solo por URL (front: /admin/usuarios, sin botón
- * ni enlace hacia ella). Herramienta demo, sin gate de auth extra: el
- * resto del demo tampoco lo tiene.
+ * ni enlace hacia ella). Vista de personal: el front solo la muestra
+ * con sesión de asesor o admin (VistaPersonal).
  *
  * Todo persiste en Postgres (tabla pacientes): crear, editar y borrar
  * aquí se guarda de forma permanente, igual que el registro normal.

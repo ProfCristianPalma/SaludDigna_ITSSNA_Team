@@ -560,9 +560,10 @@ export async function enviarWhatsapp(
 
 
 // --- Administración de usuarios (solo por URL: /admin/usuarios) --------
-// CRUD real contra Postgres (tabla pacientes). Sin gate de auth extra:
-// el resto del demo tampoco lo tiene. Es una herramienta demo, solo se
-// entra escribiendo la URL; no hay botón ni enlace hacia ella.
+// CRUD real contra Postgres (tabla pacientes). Vista de personal: el
+// front solo la muestra con sesión de asesor o admin. Es una
+// herramienta demo, solo se entra escribiendo la URL; no hay botón ni
+// enlace hacia ella.
 export interface UsuarioAdmin {
   id: string;
   nombre: string;
@@ -610,6 +611,55 @@ export async function actualizarUsuarioAdmin(id: string, input: UsuarioAdminInpu
  */
 export async function eliminarUsuarioAdmin(id: string): Promise<{ foliosEliminados: number }> {
   return fetchJson<{ foliosEliminados: number }>(`/admin/usuarios/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+// --- Personal: cuentas de acceso (solo por URL: /admin/usuarios) --------
+// CRUD real contra Postgres (tabla usuarios_staff, V6). La contraseña
+// NUNCA se muestra ni se devuelve por la API: no viene en el DTO y
+// solo se envía al crear o al cambiarla.
+export interface StaffAdmin {
+  id: string;
+  nombre: string;
+  usuario: string;
+  /** "ASESOR" o "ADMINISTRADOR". */
+  rol: string;
+  createdAt: string | null;
+}
+
+export interface StaffAdminInput {
+  nombre: string;
+  usuario: string;
+  rol: string;
+  /** Obligatoria al crear; al editar, solo se cambia si se envía una nueva. */
+  password?: string;
+}
+
+/** Todas las cuentas del personal (GET /api/admin/staff). */
+export async function getStaffAdmin(): Promise<StaffAdmin[]> {
+  return fetchJson<StaffAdmin[]>('/admin/staff');
+}
+
+/** Crea una cuenta de personal (POST /api/admin/staff). 409 si el usuario ya existe. */
+export async function crearStaffAdmin(input: StaffAdminInput): Promise<StaffAdmin> {
+  return fetchJson<StaffAdmin>('/admin/staff', {
+    method: 'POST',
+    body: JSON.stringify({ ...input, usuario: input.usuario.trim().toLowerCase() }),
+  });
+}
+
+/** Edita una cuenta de personal (PUT /api/admin/staff/{id}). 409 si el usuario choca con otra cuenta. */
+export async function actualizarStaffAdmin(id: string, input: StaffAdminInput): Promise<StaffAdmin> {
+  return fetchJson<StaffAdmin>(`/admin/staff/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ ...input, usuario: input.usuario.trim().toLowerCase() }),
+  });
+}
+
+/** Borra una cuenta de personal. 409 si es el último admin o tu propia cuenta. */
+export async function eliminarStaffAdmin(id: string): Promise<void> {
+  await fetchJson<unknown>(`/admin/staff/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
 }
