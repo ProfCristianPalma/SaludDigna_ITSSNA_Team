@@ -7,6 +7,7 @@ import AppPage from './pages/AppPage';
 import AsesorPage from './pages/AsesorPage';
 import BienvenidaPage from './pages/BienvenidaPage';
 import ClinicaPage from './pages/ClinicaPage';
+import DoctorPage from './pages/DoctorPage';
 import HistorialPage from './pages/HistorialPage';
 import JourneyPage from './pages/JourneyPage';
 import LoginPage from './pages/LoginPage';
@@ -76,12 +77,18 @@ export default function App() {
 
   const nombreSesion = sesion?.paciente?.nombre.split(' ')[0] ?? sesion?.usuario ?? null;
 
+  // Saludo: al doctor se le trata como tal, con su nombre de staff
+  // (GET /api/auth/yo lo devuelve en `nombre`). El resto igual.
+  const saludo =
+    sesion?.rol === 'DOCTOR' ? `Hola, Dr. ${sesion.nombre ?? sesion.usuario}` : `Hola, ${nombreSesion}`;
+
   // Asesor y Clínica son del personal: sus enlaces solo se ven con
   // sesión de asesor o admin. Sin sesión, o con sesión de paciente,
   // no aparecen en el nav. Esto es solo visibilidad: la protección
   // real está en cada página (VistaPersonal), que pide el login de
   // personal aunque se entre por URL directa.
   const esPersonal = sesion?.rol === 'ASESOR' || sesion?.rol === 'ADMINISTRADOR';
+  const esDoctor = sesion?.rol === 'DOCTOR' || sesion?.rol === 'ADMINISTRADOR';
 
   return (
     <div className="app-shell">
@@ -98,9 +105,11 @@ export default function App() {
               iniciada no aparece en ninguna página. El logo de marca
               sigue enlazando a "/". */}
           {!sesion && <NavLink to="/">Inicio</NavLink>}
-          <NavLink to="/cotizar">Cotizar</NavLink>
+          <NavLink to="/cotizar">Web</NavLink>
           <NavLink to="/whatsapp">WhatsApp</NavLink>
           {esPersonal && <NavLink to="/asesor">Asesor</NavLink>}
+          {esPersonal && <NavLink to="/admin/usuarios">Usuarios</NavLink>}
+          {esDoctor && <NavLink to="/doctor">Doctor</NavLink>}
           <NavLink to="/app">App</NavLink>
           <NavLink to="/historial">Historial</NavLink>
           {esPersonal && <NavLink to="/clinica">Clínica</NavLink>}
@@ -112,7 +121,7 @@ export default function App() {
               azul, sin recorte) y Cerrar sesión bien visible. */}
           {sesion ? (
             <>
-              <span className="sesion-nombre">Hola, {nombreSesion}</span>
+              <span className="sesion-nombre">{saludo}</span>
               <button type="button" className="btn btn-secondary" onClick={cerrarSesion}>
                 Cerrar sesión
               </button>
@@ -146,12 +155,14 @@ export default function App() {
           <Route path="/app" element={<AppPage />} />
           <Route path="/historial" element={<HistorialPage />} />
           <Route path="/clinica" element={<ClinicaPage />} />
+          <Route path="/doctor" element={<DoctorPage />} />
           <Route path="/journey/:id" element={<JourneyPage />} />
           <Route path="/journey" element={<JourneyPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/registro" element={<RegistroPage />} />
-          {/* Admin de usuarios: SOLO por URL, sin botón ni enlace desde
-              ninguna otra página (ver AdminUsuariosPage). */}
+          {/* Admin de usuarios: la pestaña "Usuarios" del nav solo se
+              ve con sesión de asesor o admin (ver arriba); la puerta
+              de personal de la página sigue protegiendo la URL directa. */}
           <Route path="/admin/usuarios" element={<AdminUsuariosPage />} />
           <Route path="*" element={<BienvenidaPage />} />
         </Routes>

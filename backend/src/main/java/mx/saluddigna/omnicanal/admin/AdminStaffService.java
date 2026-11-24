@@ -153,10 +153,10 @@ public class AdminStaffService {
         if (r.equals("ADMIN")) {
             return "ADMINISTRADOR";
         }
-        if (r.equals("ADMINISTRADOR") || r.equals("ASESOR")) {
+        if (r.equals("ADMINISTRADOR") || r.equals("ASESOR") || r.equals("DOCTOR")) {
             return r;
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "El rol debe ser ASESOR o ADMINISTRADOR");
+                "El rol debe ser ASESOR, ADMINISTRADOR o DOCTOR");
     }
 }

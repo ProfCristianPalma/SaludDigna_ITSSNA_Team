@@ -108,6 +108,22 @@ public class CanalController {
     /** Fecha latinoamericana DD/MM/AAAA (dia/mes/ano, no mes/dia). */
     private static final Pattern FECHA_LATINA = Pattern.compile("(\\d{1,2})/(\\d{1,2})/(\\d{4})");
 
+    /** Fecha corta DD/MM (año actual): "25/11". No casa con DD/MM/AAAA (eso lo cubre FECHA_LATINA). */
+    private static final Pattern FECHA_CORTA = Pattern.compile("(\\d{1,2})/(\\d{1,2})(?!/)");
+
+    /** "el 25 de noviembre", "25 de noviembre de 2026". */
+    private static final Pattern FECHA_MES_NOMBRE = Pattern.compile(
+            "(?:el\\s+)?(\\d{1,2})\\s+de\\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\\s+de\\s+(\\d{4}))?",
+            Pattern.CASE_INSENSITIVE);
+
+    /** "el 25": día del mes actual. */
+    private static final Pattern FECHA_EL_DIA = Pattern.compile("\\bel\\s+(\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
+
+    /** Hora: "10:00", "a las 10", "10 h". */
+    private static final Pattern HORA_HHMM = Pattern.compile("(\\d{1,2}):(\\d{2})\\b");
+    private static final Pattern HORA_A_LAS = Pattern.compile("a\\s+las?\\s+(\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HORA_H = Pattern.compile("(\\d{1,2})\\s*h(?:oras?)?\\b", Pattern.CASE_INSENSITIVE);
+
     /** Formato en el que se le muestran las fechas al usuario: DD/MM/AAAA. */
     private static final DateTimeFormatter FORMATO_LATINO = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
@@ -119,15 +135,51 @@ public class CanalController {
     }
 
     /**
-     * Extrae una fecha del mensaje del usuario. Acepta DD/MM/AAAA
-     * (formato latinoamericano), AAAA-MM-DD (compatibilidad) y las
-     * palabras "hoy", "mañana" y "pasado mañana". Devuelve vacío si
-     * no hay fecha o si no es una fecha real (31/02/2026).
+     * Extrae fecha Y hora del mensaje ("25/11/2026 10:00", "25/11 a las 10",
+     * "el 25", "el 25 de noviembre", "hoy", "mañana", "pasado mañana").
+     * Sin hora se usa las 10:00 (comportamiento actual). Devuelve vacío
+     * si no hay fecha o si la fecha/hora no es real (31/02/2026, 25:00).
      */
-    static Optional<LocalDate> extraerFecha(String mensaje) {
+    static Optional<LocalDateTime> extraerFechaHora(String mensaje) {
+        Optional<LocalDate> fecha = extraerFechaDeMensaje(mensaje);
+        if (fecha.isEmpty()) return Optional.empty();
+        Optional<LocalTime> hora = extraerHora(mensaje);
+        if (hora.isEmpty() && pareceHora(mensaje)) return Optional.empty(); // hora escrita pero imposible (25:00)
+        return Optional.of(LocalDateTime.of(fecha.get(), hora.orElse(LocalTime.of(10, 0))));
+    }
+
+    /** Solo la fecha de extraerFechaHora: DD/MM/AAAA, AAAA-MM-DD, DD/MM, "el DD (de <mes>)", "hoy"/"mañana"/"pasado mañana". */
+    private static Optional<LocalDate> extraerFechaDeMensaje(String mensaje) {
         Optional<LocalDate> explicita = extraerFechaExplicita(mensaje);
         if (explicita.isPresent()) return explicita;
         if (mensaje == null) return Optional.empty();
+        Matcher mes = FECHA_MES_NOMBRE.matcher(mensaje);
+        if (mes.find()) {
+            try {
+                int anio = mes.group(3) == null ? LocalDate.now().getYear() : Integer.parseInt(mes.group(3));
+                return Optional.of(LocalDate.of(anio, mesDeNombre(mes.group(2)), Integer.parseInt(mes.group(1))));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher corta = FECHA_CORTA.matcher(mensaje);
+        if (corta.find()) {
+            try {
+                return Optional.of(LocalDate.of(LocalDate.now().getYear(),
+                        Integer.parseInt(corta.group(2)), Integer.parseInt(corta.group(1))));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher dia = FECHA_EL_DIA.matcher(mensaje);
+        if (dia.find()) {
+            try {
+                LocalDate hoy = LocalDate.now();
+                return Optional.of(LocalDate.of(hoy.getYear(), hoy.getMonth(), Integer.parseInt(dia.group(1))));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
         String norm = normalizar(mensaje);
         if (Pattern.compile("\\bpasado manana\\b").matcher(norm).find()) {
             return Optional.of(LocalDate.now().plusDays(2));
@@ -139,6 +191,79 @@ public class CanalController {
             return Optional.of(LocalDate.now());
         }
         return Optional.empty();
+    }
+
+    private static int mesDeNombre(String nombre) {
+        return switch (normalizar(nombre)) {
+            case "enero" -> 1;
+            case "febrero" -> 2;
+            case "marzo" -> 3;
+            case "abril" -> 4;
+            case "mayo" -> 5;
+            case "junio" -> 6;
+            case "julio" -> 7;
+            case "agosto" -> 8;
+            case "septiembre", "setiembre" -> 9;
+            case "octubre" -> 10;
+            case "noviembre" -> 11;
+            case "diciembre" -> 12;
+            default -> 0; // no llega: el regex solo casa meses validos
+        };
+    }
+
+    /** Hora escrita en el mensaje ("10:00", "a las 10", "10 h"). Vacío si no hay hora o si es imposible (25:00). */
+    private static Optional<LocalTime> extraerHora(String mensaje) {
+        if (mensaje == null) return Optional.empty();
+        Matcher hhmm = HORA_HHMM.matcher(mensaje);
+        if (hhmm.find()) {
+            try {
+                return Optional.of(LocalTime.of(Integer.parseInt(hhmm.group(1)), Integer.parseInt(hhmm.group(2))));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher aLas = HORA_A_LAS.matcher(mensaje);
+        if (aLas.find()) {
+            try {
+                return Optional.of(LocalTime.of(Integer.parseInt(aLas.group(1)), 0));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher h = HORA_H.matcher(mensaje);
+        if (h.find()) {
+            try {
+                return Optional.of(LocalTime.of(Integer.parseInt(h.group(1)), 0));
+            } catch (java.time.DateTimeException e) {
+                return Optional.empty();
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** ¿El mensaje trae algo que parece una hora escrita? (para distinguir "hora imposible" de "no era una hora"). */
+    private static boolean pareceHora(String mensaje) {
+        if (mensaje == null) return false;
+        return HORA_HHMM.matcher(mensaje).find() || HORA_A_LAS.matcher(mensaje).find() || HORA_H.matcher(mensaje).find();
+    }
+
+    /** ¿El mensaje trae algo que parece fecha u hora? (fecha imposible u hora imposible, no "eso no era una fecha"). */
+    private static boolean pareceFechaHora(String mensaje) {
+        if (mensaje == null) return false;
+        return pareceFecha(mensaje) || FECHA_CORTA.matcher(mensaje).find()
+                || FECHA_MES_NOMBRE.matcher(mensaje).find() || FECHA_EL_DIA.matcher(mensaje).find()
+                || pareceHora(mensaje) || extraerFecha(mensaje).isPresent();
+    }
+
+    /**
+     * Extrae una fecha del mensaje del usuario. Acepta DD/MM/AAAA
+     * (formato latinoamericano), AAAA-MM-DD (compatibilidad), DD/MM,
+     * "el DD (de <mes>)" y las palabras "hoy", "mañana" y "pasado
+     * mañana". Devuelve vacío si no hay fecha o si no es una fecha
+     * real (31/02/2026). Delega en extraerFechaHora (la hora se ignora aquí).
+     */
+    static Optional<LocalDate> extraerFecha(String mensaje) {
+        return extraerFechaHora(mensaje).map(LocalDateTime::toLocalDate);
     }
 
     /** Solo fechas escritas (DD/MM/AAAA o AAAA-MM-DD), sin "hoy"/"mañana": para registrar un nacimiento. */
@@ -210,6 +335,31 @@ public class CanalController {
         Paciente paciente = pacienteOpt.get();
         // Un paciente puede tener varios folios activos, uno por estudio.
         List<Tramite> activos = tramites.listarActivosDe(paciente.getId());
+
+        // La intención de listar o de volver manda sobre el contexto:
+        // "muestrame mis folios" con un folio en contexto NO debe
+        // devolver el estado de ese folio (captura 2, 2026-11-24), y
+        // "folios" debe listar sin "No entendí" (captura 1). Por eso
+        // se comprueba ANTES de resolver folio/contexto/intención.
+        // "folio 1" NO es pedir lista: si el texto trae una selección
+        // explícita (folio N o SD-2026-XXXX), esa manda.
+        if (esPedirLista(norm) && !SELECCION_PATTERN.matcher(texto).find() && !FOLIO_PATTERN.matcher(texto).find()) {
+            if (activos.isEmpty()) {
+                return respuestaSinTramite("Hola " + paciente.getNombre().split(" ")[0]
+                        + ", aún no tienes trámites activos. Puedo cotizarte un estudio:\n" + textoEstudios(),
+                        "ELEGIR_ESTUDIO", true, opcionesEstudios());
+            }
+            return respuestaListaFolios(paciente, activos, texto, norm);
+        }
+        if (esVolver(norm)) {
+            if (activos.isEmpty()) {
+                return respuestaSinTramite("Hola " + paciente.getNombre().split(" ")[0]
+                        + ", aún no tienes trámites activos. Puedo cotizarte un estudio:\n" + textoEstudios(),
+                        "ELEGIR_ESTUDIO", true, opcionesEstudios());
+            }
+            return respuestaListaFolios(paciente, activos, texto, norm,
+                    "Claro, ¿con cuál seguimos? Tienes " + activos.size() + " trámites activos.");
+        }
 
         // Si el mensaje selecciona un folio, ESA es su intención y se
         // marca como entendida: nunca debe terminar en "No entendí" un
@@ -404,17 +554,24 @@ public class CanalController {
 
     /** Varios folios y el mensaje no dice con cuál seguir: se listan y se pregunta, sin elegir al azar. */
     private Map<String, Object> respuestaListaFolios(Paciente paciente, List<Tramite> activos, String texto, String norm) {
+        return respuestaListaFolios(paciente, activos, texto, norm, null);
+    }
+
+    /** Como la anterior, con prefacio fijo (p. ej. al "volver"): siempre entendido=true. */
+    private Map<String, Object> respuestaListaFolios(Paciente paciente, List<Tramite> activos, String texto, String norm, String prefacioFijo) {
         String prefacio;
         boolean entendido;
-        Optional<String> ambiguo = motivoAmbiguo(norm, texto, activos);
-        if (esSaludoOAyuda(norm) || esPedirLista(norm)) {
+        if (prefacioFijo != null) {
+            prefacio = prefacioFijo;
+            entendido = true;
+        } else if (esSaludoOAyuda(norm) || esPedirLista(norm)) {
             prefacio = "Hola " + paciente.getNombre().split(" ")[0] + ", tienes " + activos.size() + " trámites activos. ¿Con cuál seguimos?";
             entendido = true;
-        } else if (ambiguo.isPresent()) {
+        } else if (motivoAmbiguo(norm, texto, activos).isPresent()) {
             // La intención sí se reconoció (elegir clínica, una fecha...),
             // lo que falta es saber a qué folio aplica: es una aclaración,
             // no un "no entendí".
-            prefacio = "No sé a cuál de tus folios te refieres con ese mensaje: " + ambiguo.get()
+            prefacio = "No sé a cuál de tus folios te refieres con ese mensaje: " + motivoAmbiguo(norm, texto, activos).get()
                     + ". Dime el folio con el que seguimos.";
             entendido = true;
         } else {
@@ -626,12 +783,30 @@ public class CanalController {
                     true, opcionesPara(tramite), tramite);
         }
 
+        // Una afirmación ("sí", "dale", "va", "ok") nunca es un
+        // "No entendí": lo que hace depende del estado (en
+        // CLINICA_SELECCIONADA pide la fecha; en COTIZADO lista las
+        // clínicas; en el resto, resume el estado con sus opciones).
+        if (esAfirmacion(norm)) {
+            return switch (tramite.getEstado()) {
+                case CLINICA_SELECCIONADA -> new ResultadoBot("¡Perfecto! ¿Qué día prefieres para tu cita en "
+                        + nombreClinica(tramite) + "? Dime la fecha en formato DD/MM/AAAA (por ejemplo " + manana()
+                        + "), o dime \"hoy\" o \"mañana\".", true, opcionesFechas(), tramite);
+                case COTIZADO -> new ResultadoBot(listarClinicasTexto(paciente.getNombre().split(" ")[0], tramite),
+                        true, opcionesClinicas(), tramite);
+                default -> new ResultadoBot(resumenEstado(paciente, tramite)
+                        + "\nAhora puedes:\n" + listarOpcionesNumeradas(opcionesPara(tramite)),
+                        true, opcionesPara(tramite), tramite);
+            };
+        }
+
         Optional<ResultadoBot> accion = switch (tramite.getEstado()) {
             case COTIZADO -> procesarCotizado(paciente, tramite, norm);
             case CLINICA_SELECCIONADA -> procesarClinicaSeleccionada(paciente, tramite, texto, norm);
             case INICIADO, DATOS_PENDIENTES -> procesarInicio(paciente, tramite, norm);
             case CONFIRMADO -> procesarConfirmado(paciente, tramite, norm);
             case ATENDIDO -> procesarAtendido(paciente, tramite, norm);
+            case NO_PRESENTADO, NO_REALIZADO -> procesarCerrado(paciente, tramite, norm);
         };
         if (accion.isPresent()) return accion.get();
         if (esSaludoOAyuda(norm)) return ayuda(paciente, tramite);
@@ -680,22 +855,36 @@ public class CanalController {
                     + actualizado.getFolio() + ":\n" + listarClinicasTexto(nombre, actualizado),
                     true, opcionesClinicas(), actualizado));
         }
-        Optional<LocalDate> fechaOpt = extraerFecha(mensajeCrudo);
-        if (fechaOpt.isPresent()) {
-            LocalDate fecha = fechaOpt.get();
-            if (fecha.isBefore(LocalDate.now())) {
-                return Optional.of(new ResultadoBot("Esa fecha ya pasó (" + fecha.format(FORMATO_LATINO)
-                        + " es anterior a hoy, " + LocalDate.now().format(FORMATO_LATINO) + "). Dime otro día para tu cita, en formato DD/MM/AAAA.",
+        // Fecha con hora opcional ("25/11/2026 10:00", "25/11 a las 10",
+        // "el 25", "el 25 de noviembre", "mañana"); sin hora, las 10:00.
+        Optional<LocalDateTime> fechaHoraOpt = extraerFechaHora(mensajeCrudo);
+        if (fechaHoraOpt.isPresent()) {
+            LocalDateTime fechaHora = fechaHoraOpt.get();
+            if (fechaHora.isBefore(LocalDateTime.now())) {
+                return Optional.of(new ResultadoBot("Esa fecha y hora ya pasaron (" + fechaHora.format(FORMATO_LATINO_HORA)
+                        + " es anterior a ahora). Dime otro día y hora para tu cita.",
                         true, opcionesFechas(), tramite));
             }
-            Tramite actualizado = tramites.confirmar(tramite.getId(), LocalDateTime.of(fecha, LocalTime.of(10, 0)));
+            Tramite actualizado;
+            try {
+                actualizado = tramites.confirmar(tramite.getId(), fechaHora);
+            } catch (ResponseStatusException e) {
+                if (e.getStatusCode() == HttpStatus.CONFLICT) {
+                    return Optional.of(new ResultadoBot("Ese horario ya está ocupado en " + nombreClinica(tramite)
+                            + " el " + fechaHora.format(FORMATO_LATINO) + " a las "
+                            + fechaHora.format(DateTimeFormatter.ofPattern("HH:mm")) + ". Dime otra fecha u hora.",
+                            true, opcionesFechas(), tramite));
+                }
+                String motivo = e.getReason() != null ? e.getReason() : e.getMessage();
+                return Optional.of(new ResultadoBot(motivo, true, opcionesFechas(), tramite));
+            }
             return Optional.of(new ResultadoBot("Confirmado " + nombre + ". Tu cita del trámite " + actualizado.getFolio()
-                    + " quedó para el " + fecha.format(FORMATO_LATINO) + " a las 10:00 en " + nombreClinica(actualizado) + ". Te esperamos.",
+                    + " quedó para el " + fechaHora.format(FORMATO_LATINO_HORA) + " en " + nombreClinica(actualizado) + ". Te esperamos.",
                     true, List.of("¿Cuándo es mi cita?", "Ayuda"), actualizado));
         }
-        if (pareceFecha(mensajeCrudo)) {
-            return Optional.of(new ResultadoBot("Esa fecha no existe o no la pude leer (" + mensajeCrudo.trim() + "). "
-                    + "Escríbela en formato DD/MM/AAAA, por ejemplo " + manana() + ", o dime \"hoy\" o \"mañana\".",
+        if (pareceFechaHora(mensajeCrudo)) {
+            return Optional.of(new ResultadoBot("Esa fecha u hora no existe o no la pude leer (" + mensajeCrudo.trim() + "). "
+                    + "Escríbela en formato DD/MM/AAAA con hora, por ejemplo " + manana() + " 10:00, o dime \"hoy\" o \"mañana\".",
                     true, opcionesFechas(), tramite));
         }
         return Optional.empty();
@@ -751,6 +940,26 @@ public class CanalController {
         return Optional.empty();
     }
 
+    /** Trámite cerrado (NO_PRESENTADO / NO_REALIZADO): como ATENDIDO,
+     * se ofrece cotizar otro estudio; nunca se reabre el cerrado. */
+    private Optional<ResultadoBot> procesarCerrado(Paciente paciente, Tramite tramite, String norm) {
+        String nombre = paciente.getNombre().split(" ")[0];
+        Optional<Estudio> estudio = elegirEstudio(norm);
+        if (estudio.isPresent()) {
+            Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.get().getId(), "WHATSAPP");
+            nuevo = tramites.cotizar(nuevo.getId(), estudio.get().getId());
+            return Optional.of(new ResultadoBot("Tu trámite " + tramite.getFolio() + " ya se cerró ("
+                    + descripcionEstado(tramite) + "). Te creé uno nuevo: "
+                    + nuevo.getFolio() + " — " + estudio.get().getNombre() + " por $" + nuevo.getPrecioCotizado()
+                    + ". Ahora elige clínica.", true, opcionesClinicas(), nuevo));
+        }
+        if (quiereCotizar(norm)) {
+            return Optional.of(new ResultadoBot("Claro " + nombre + ", estos son nuestros estudios:\n" + textoEstudios(),
+                    true, opcionesEstudios(), tramite));
+        }
+        return Optional.empty();
+    }
+
     /** Ayuda: qué puede hacer el bot EN ESTE ESTADO, con ejemplos. Nunca una respuesta vacía. */
     private ResultadoBot ayuda(Paciente paciente, Tramite tramite) {
         String nombre = paciente.getNombre().split(" ")[0];
@@ -763,6 +972,10 @@ public class CanalController {
             case INICIADO, DATOS_PENDIENTES -> sb.append("Puedo cotizarte un estudio: dime cuál necesitas (ultrasonido, perfil tiroideo, radiografía o análisis de sangre).");
             case CONFIRMADO -> sb.append("Tu cita ya está confirmada. Puedo decirte cuándo y dónde es.");
             case ATENDIDO -> sb.append("Tu trámite ya fue atendido. Puedo cotizarte otro estudio.");
+            case NO_PRESENTADO -> sb.append("Tu trámite ").append(tramite.getFolio())
+                    .append(" ya se cerró porque no te presentaste a tu cita. Puedo cotizarte otro estudio.");
+            case NO_REALIZADO -> sb.append("Tu trámite ").append(tramite.getFolio())
+                    .append(" ya se cerró porque no se pudo realizar el estudio. Puedo cotizarte otro estudio.");
         }
         sb.append("\n").append(listarOpcionesNumeradas(opcionesPara(tramite)));
         return new ResultadoBot(sb.toString(), true, opcionesPara(tramite), tramite);
@@ -798,6 +1011,8 @@ public class CanalController {
                     + (tramite.getFechaCita() == null ? "sin fecha" : tramite.getFechaCita().format(FORMATO_LATINO_HORA))
                     + " en " + nombreClinica(tramite);
             case ATENDIDO -> "ya fue atendido";
+            case NO_PRESENTADO -> "no se presentó a su cita";
+            case NO_REALIZADO -> "no se pudo realizar el estudio";
         };
     }
 
@@ -830,6 +1045,7 @@ public class CanalController {
             case INICIADO, DATOS_PENDIENTES -> opcionesEstudios();
             case CONFIRMADO -> List.of("¿Cuándo es mi cita?", "Ayuda");
             case ATENDIDO -> opcionesEstudios();
+            case NO_PRESENTADO, NO_REALIZADO -> opcionesEstudios();
         };
     }
 
@@ -891,10 +1107,39 @@ public class CanalController {
         return sb.toString().trim();
     }
 
-    /** Pide ver la lista de folios ("folio", "mis folios", "mis trámites"): no es un error, se listan. */
+    /** Pide ver la lista de folios ("folio"/"folios" pelados, "mis folios", "muestrame mis folios", "qué folios tengo", "muestrame mi folio"): no es un error, se listan. "folio 1" NO es pedir lista (es selección; lo filtra quien llama). */
     private boolean esPedirLista(String norm) {
-        return norm.equals("folio") || norm.contains("mis folios") || norm.contains("mis tramites")
-                || norm.contains("ver mis folios") || norm.contains("ver mis tramites");
+        return norm.equals("folio") || norm.equals("folios")
+                || norm.contains("mis folios") || norm.contains("mis tramites")
+                || norm.contains("lista de folios") || norm.contains("lista de tramites")
+                || norm.contains("ver mis folios") || norm.contains("ver mis tramites")
+                || norm.contains("muestrame mis folios") || norm.contains("muestrame mis tramites")
+                || norm.contains("muestra mis folios") || norm.contains("muestra mis tramites")
+                || norm.contains("muestrame mi folio") || norm.contains("muestra mi folio")
+                || norm.contains("ensenarme mis folios") || norm.contains("ensenarme mis tramites")
+                || norm.contains("ensename mis folios") || norm.contains("ensename mis tramites")
+                || norm.contains("mostrar mis folios") || norm.contains("mostrar mis tramites")
+                || norm.contains("cuales son mis folios") || norm.contains("cuales son mis tramites")
+                || norm.contains("que folios tengo") || norm.contains("que tramites tengo")
+                || norm.contains("todos mis folios") || norm.contains("todos mis tramites");
+    }
+
+    /** Volver / cambiar de folio: olvida el contexto y lista los folios para elegir otro. "cambiar clínica" y "otro estudio" NO son volver. */
+    private boolean esVolver(String norm) {
+        if (norm.contains("otro estudio") || norm.contains("cambiar clinica") || norm.contains("cambiar la clinica")) return false;
+        if (norm.contains("cambiar de folio") || norm.contains("cambiar folio")
+                || norm.contains("otro folio") || norm.contains("elegir otro")
+                || norm.contains("otro tramite") || norm.contains("salir de este folio")
+                || norm.contains("salir del folio") || norm.contains("cambiar de tramite")) return true;
+        return Pattern.compile("\\b(volver|regresar|atras)\\b").matcher(norm).find();
+    }
+
+    /** Afirmación ("sí", "confirmo", "dale", "va", "de acuerdo", "ok", "vale", "claro"): nunca es un "no entendí"; lo que hace depende del estado. */
+    private boolean esAfirmacion(String norm) {
+        return norm.equals("si") || norm.equals("confirmo") || norm.equals("dale") || norm.equals("va")
+                || norm.equals("de acuerdo") || norm.equals("ok") || norm.equals("vale") || norm.equals("claro")
+                || norm.equals("perfecto")
+                || norm.startsWith("si,") || norm.startsWith("si ") || norm.startsWith("claro que");
     }
 
     /** Pregunta por su propio trámite ("¿cuándo es mi cita?", "¿cuál
@@ -910,9 +1155,10 @@ public class CanalController {
     }
 
     private boolean esSaludoOAyuda(String norm) {
-        return norm.equals("hola") || norm.startsWith("hola ") || norm.contains("ayuda")
+        return norm.equals("hola") || norm.startsWith("hola ") || norm.contains("ayuda") || norm.contains("ayudame")
                 || norm.contains("opciones") || norm.contains("que puedo hacer") || norm.contains("que puedes hacer")
                 || norm.contains("menu") || norm.contains("buenos dias") || norm.contains("buenas tardes")
+                || norm.contains("que hago") || norm.contains("como sigo") || norm.contains("no se que hacer")
                 || norm.contains("buenas noches") || norm.equals("buenas") || norm.equals("hi") || norm.equals("hello");
     }
 
@@ -963,6 +1209,7 @@ public class CanalController {
             if (!n.isBlank() && norm.contains(n)) return Optional.of(e);
             if (norm.contains("ultrasonido") && n.contains("ultrasonido")) return Optional.of(e);
             if ((norm.contains("tiroideo") || norm.contains("tiroides")) && n.contains("tiroideo")) return Optional.of(e);
+            if ((norm.contains("tsh") || norm.contains("t3") || norm.contains("t4")) && n.contains("tiroideo")) return Optional.of(e);
             if (norm.contains("radiografia") && n.contains("radiografia")) return Optional.of(e);
             if ((norm.contains("analisis") || norm.contains("sangre") || norm.contains("biometria")) && n.contains("analisis")) return Optional.of(e);
         }

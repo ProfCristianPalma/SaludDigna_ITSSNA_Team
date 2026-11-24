@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { atenderTramite, getCitasClinica, isApiError, registrarEventoCheckIn } from '../api';
 import { formatearFechaHora } from '../fechas';
 import type { CitaClinica } from '../api';
+import type { EstadoTramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 import VistaPersonal from '../components/VistaPersonal';
 
@@ -11,7 +12,7 @@ import VistaPersonal from '../components/VistaPersonal';
 //
 // Vista de personal: el contenido solo se monta con sesión de asesor
 // o admin (VistaPersonal). Sin sesión no se llama a la API.
-type Filtro = 'CONFIRMADO' | 'ATENDIDO' | 'TODOS';
+type Filtro = 'CONFIRMADO' | 'ATENDIDO' | 'NO_PRESENTADO' | 'NO_REALIZADO' | 'TODOS';
 
 function ContenidoClinica() {
   const [citas, setCitas] = useState<CitaClinica[]>([]);
@@ -113,6 +114,20 @@ function ContenidoClinica() {
         </button>
         <button
           type="button"
+          className={filtro === 'NO_PRESENTADO' ? 'btn btn-primary' : 'btn btn-secondary'}
+          onClick={() => setFiltro('NO_PRESENTADO')}
+        >
+          No presentados
+        </button>
+        <button
+          type="button"
+          className={filtro === 'NO_REALIZADO' ? 'btn btn-primary' : 'btn btn-secondary'}
+          onClick={() => setFiltro('NO_REALIZADO')}
+        >
+          No realizados
+        </button>
+        <button
+          type="button"
           className={filtro === 'TODOS' ? 'btn btn-primary' : 'btn btn-secondary'}
           onClick={() => setFiltro('TODOS')}
         >
@@ -136,7 +151,7 @@ function ContenidoClinica() {
         {visibles.map((c) => (
           <article key={c.tramiteId} className="card">
             <p>
-              Folio: <strong>{c.folio}</strong> <EstadoBadge estado={c.estado as 'CONFIRMADO' | 'ATENDIDO'} />
+              Folio: <strong>{c.folio}</strong> <EstadoBadge estado={c.estado as EstadoTramite} />
             </p>
             <h2>{c.estudioNombre}</h2>
             <dl className="kv">

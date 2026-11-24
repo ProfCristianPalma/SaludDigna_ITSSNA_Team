@@ -22,5 +22,7 @@ public record CitaClinicaDTO(
         String clinicaNombre,
         String clinicaCiudad,
         LocalDateTime fechaCita,
-        String estado) {
+        String estado,
+        /** ¿Ya se registro el check-in de este tramite? (del log de eventos). */
+        boolean checkIn) {
 }

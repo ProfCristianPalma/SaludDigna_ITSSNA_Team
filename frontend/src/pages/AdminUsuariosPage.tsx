@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   actualizarStaffAdmin,
   actualizarUsuarioAdmin,
@@ -6,12 +7,16 @@ import {
   crearUsuarioAdmin,
   eliminarStaffAdmin,
   eliminarUsuarioAdmin,
+  getPerfilYo,
   getStaffAdmin,
+  getTramitePorFolio,
   getUsuariosAdmin,
   isApiError,
+  normalizarFolio,
   normalizarTelefono,
 } from '../api';
 import type { StaffAdmin, StaffAdminInput, UsuarioAdmin, UsuarioAdminInput } from '../api';
+import type { Tramite } from '../types';
 import { esFechaLatinaValida, formatearFecha, parsearFechaLatina } from '../fechas';
 import VistaPersonal from '../components/VistaPersonal';
 
@@ -35,6 +40,18 @@ function ContenidoAdminUsuarios() {
   const [cargando, setCargando] = useState(true);
   const [mensaje, setMensaje] = useState('');
   const [error, setError] = useState('');
+
+  // ¿Quién está viendo la página? Solo el ADMINISTRADOR ve la sección
+  // de cuentas de personal; al asesor ni siquiera se le cargan.
+  const [esAdmin, setEsAdmin] = useState(false);
+
+  // Búsqueda por folio: el buscador de usuarios filtra por nombre o
+  // teléfono en cliente y un folio nunca coincidía ("No hay usuarios
+  // con esa búsqueda"). Esta es una búsqueda aparte, contra la API.
+  const [folioBusqueda, setFolioBusqueda] = useState('');
+  const [tramiteFolio, setTramiteFolio] = useState<Tramite | null>(null);
+  const [buscandoFolio, setBuscandoFolio] = useState(false);
+  const [mensajeFolio, setMensajeFolio] = useState('');
 
   const [editandoId, setEditandoId] = useState<string | null>(null);
   const [nombre, setNombre] = useState('');
@@ -73,6 +90,18 @@ function ContenidoAdminUsuarios() {
   }, []);
 
   useEffect(() => {
+    async function verificarRol() {
+      try {
+        const perfil = await getPerfilYo();
+        setEsAdmin(perfil.rol === 'ADMINISTRADOR');
+      } catch {
+        setEsAdmin(false);
+      }
+    }
+    void verificarRol();
+  }, []);
+
+  useEffect(() => {
     void cargar();
   }, [cargar]);
 
@@ -92,9 +121,59 @@ function ContenidoAdminUsuarios() {
     }
   }, []);
 
+  // La lista de cuentas de personal solo se carga para el admin.
   useEffect(() => {
-    void cargarStaff();
-  }, [cargarStaff]);
+    if (esAdmin) void cargarStaff();
+  }, [esAdmin, cargarStaff]);
+
+  async function handleBuscarFolio(e: React.FormEvent) {
+    e.preventDefault();
+    const q = folioBusqueda.trim();
+    if (!q) return;
+    const folio = normalizarFolio(q);
+    if (!folio) {
+      setTramiteFolio(null);
+      setMensajeFolio('Escribe un folio válido, por ejemplo SD-2026-0012.');
+      return;
+    }
+    setBuscandoFolio(true);
+    setMensajeFolio('');
+    setTramiteFolio(null);
+    try {
+      setTramiteFolio(await getTramitePorFolio(folio));
+    } catch (err) {
+      setMensajeFolio(
+        isApiError(err) && err.status === 404
+          ? `No hay ningún trámite con el folio ${folio}.`
+          : isApiError(err)
+            ? `No se pudo buscar el folio ${folio} (HTTP ${err.status}: ${err.message}).`
+            : 'El backend no respondió, no se pudo buscar el folio.',
+      );
+    } finally {
+      setBuscandoFolio(false);
+    }
+  }
+
+  // "Editar usuario" desde el resultado por folio: carga ese paciente
+  // en el formulario de edición (de la lista si ya está, o con los
+  // datos del trámite si no).
+  function empezarEditarDesdeFolio(t: Tramite) {
+    const p = t.paciente;
+    if (!p) return;
+    const enLista = usuarios.find((u) => u.id === p.id);
+    if (enLista) {
+      empezarEditar(enLista);
+    } else {
+      setEditandoId(p.id);
+      setNombre(p.nombre);
+      setTelefono(p.telefono);
+      setEmail('');
+      setFechaNacimiento(p.fechaNacimiento ? formatearFecha(p.fechaNacimiento) : '');
+      setPassword('');
+    }
+    setMensaje(`Editando a ${p.nombre} (folio ${t.folio}).`);
+    setError('');
+  }
 
   function limpiarFormulario() {
     setEditandoId(null);
@@ -310,6 +389,41 @@ function ContenidoAdminUsuarios() {
         </button>
       </div>
 
+      <form className="card form-inline" style={{ marginBottom: 16 }} onSubmit={handleBuscarFolio}>
+        <input
+          value={folioBusqueda}
+          onChange={(e) => setFolioBusqueda(e.target.value)}
+          placeholder="Buscar folio (ej. SD-2026-0012)"
+          aria-label="Buscar folio"
+        />
+        <button type="submit" className="btn btn-secondary" disabled={buscandoFolio}>
+          {buscandoFolio ? 'Buscando…' : 'Buscar folio'}
+        </button>
+      </form>
+
+      {mensajeFolio && <p className="notice" role="status">{mensajeFolio}</p>}
+
+      {tramiteFolio && (
+        <section className="card" style={{ marginBottom: 16 }}>
+          <h2>Trámite {tramiteFolio.folio}</h2>
+          <dl className="kv">
+            <dt>Paciente</dt><dd>{tramiteFolio.paciente?.nombre ?? '—'} · {tramiteFolio.paciente?.telefono ?? '—'}</dd>
+            <dt>Estudio</dt><dd>{tramiteFolio.estudio.nombre}</dd>
+            <dt>Estado</dt><dd>{tramiteFolio.estado}</dd>
+            <dt>Fecha de cita</dt><dd>{tramiteFolio.fechaCita ? formatearFecha(tramiteFolio.fechaCita) : 'Sin confirmar'}</dd>
+            <dt>Clínica</dt><dd>{tramiteFolio.clinica ? `${tramiteFolio.clinica.nombre} (${tramiteFolio.clinica.ciudad})` : 'Sin seleccionar'}</dd>
+          </dl>
+          <div className="actions">
+            <button type="button" className="btn btn-primary" onClick={() => empezarEditarDesdeFolio(tramiteFolio)}>
+              Editar usuario
+            </button>
+            <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(tramiteFolio.folio)}`}>
+              Ver Journey
+            </Link>
+          </div>
+        </section>
+      )}
+
       <section className="card" style={{ marginBottom: 16 }}>
         <h2>{editandoId ? 'Editar usuario' : 'Crear usuario'}</h2>
         <form onSubmit={handleGuardar} className="form">
@@ -402,6 +516,9 @@ function ContenidoAdminUsuarios() {
         </section>
       )}
 
+      {/* Solo el administrador ve (y carga) las cuentas de personal:
+          el asesor solo ve la sección de pacientes de arriba. */}
+      {esAdmin && (
       <section className="card" style={{ marginTop: 16 }}>
         <h2>Personal — cuentas de acceso</h2>
         <p className="muted">
@@ -442,6 +559,7 @@ function ContenidoAdminUsuarios() {
             <select value={staffRol} onChange={(e) => setStaffRol(e.target.value)}>
               <option value="ASESOR">Asesor</option>
               <option value="ADMINISTRADOR">Administrador</option>
+              <option value="DOCTOR">Doctor</option>
             </select>
           </label>
           <label>
@@ -503,6 +621,7 @@ function ContenidoAdminUsuarios() {
           </table>
         )}
       </section>
+      )}
     </div>
   );
 }

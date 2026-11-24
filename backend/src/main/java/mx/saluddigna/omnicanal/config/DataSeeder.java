@@ -68,6 +68,7 @@ public class DataSeeder implements CommandLineRunner {
         // se crea con hash PBKDF2; si ya existe, no se pisa (idempotente).
         usuarioStaff("Administrador", "admin", "admin123", "ADMINISTRADOR");
         usuarioStaff("Asesor Call Center", "asesor", "asesor123", "ASESOR");
+        usuarioStaff("Alejandro Ruiz", "doctor", "doctor123", "DOCTOR");
 
         if (estudios.count() == 0) {
             estudios.saveAll(List.of(

@@ -123,18 +123,73 @@ public class TramiteService {
         if (fechaCita == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fechaCita es obligatoria");
         }
+        if (fechaCita.isBefore(LocalDateTime.now())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La fecha y hora de la cita ya pasaron: "
+                            + fechaCita.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")));
+        }
         if (tramite.getClinicaId() == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "El tramite no tiene clinica seleccionada");
         }
         Clinica clinica = clinicas.findById(tramite.getClinicaId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Clinica no encontrada"));
+        // Disponibilidad sin empalmes: el hueco es (clinica, fecha, hora).
+        // Si otra cita CONFIRMADA ya ocupa ese hueco, se rechaza con 409
+        // y el mensaje dice cual es el hueco ocupado. La propia cita del
+        // tramite (si se reconfirma tras cambiar de clinica) no cuenta.
+        citas.findByClinicaIdAndFechaHoraAndEstado(tramite.getClinicaId(), fechaCita, "CONFIRMADA")
+                .filter(otra -> !otra.getTramite().getId().equals(tramiteId))
+                .ifPresent(otra -> {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "Ese horario ya esta ocupado en " + clinica.getNombre() + " el "
+                                    + fechaCita.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                                    + " a las " + fechaCita.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+                                    + ". Elige otra fecha u hora.");
+                });
         tramite.setFechaCita(fechaCita);
         tramite.setEstado(EstadoTramite.CONFIRMADO);
         tramite = tramites.save(tramite);
-        citas.save(new Cita(tramite, fechaCita, clinica, "CONFIRMADA"));
+        // La cita es @OneToOne con tramite_id unico: si el tramite ya
+        // tenia una cita (reconfirmacion tras cambiar de clinica), se
+        // actualiza en vez de crear otra fila.
+        Optional<Cita> existente = citas.findByTramiteId(tramiteId);
+        if (existente.isPresent()) {
+            Cita cita = existente.get();
+            cita.setFechaHora(fechaCita);
+            cita.setClinica(clinica);
+            cita.setEstado("CONFIRMADA");
+            citas.save(cita);
+        } else {
+            citas.save(new Cita(tramite, fechaCita, clinica, "CONFIRMADA"));
+        }
         eventos.registrar(tramite.getId(), TipoEvento.CITA_CONFIRMADA, tramite.getCanalOrigen(), "PACIENTE",
                 json(Map.of("fechaCita", fechaCita.toString(), "clinica", clinica.getNombre())));
         return tramite;
+    }
+
+    /**
+     * ¿El hueco (clinica, fecha, hora) esta ocupado por otra cita
+     * CONFIRMADA? `exceptoTramiteId` (opcional) excluye la cita propia
+     * del tramite que esta reconfirmando.
+     */
+    @Transactional(readOnly = true)
+    public boolean huecoOcupado(Long clinicaId, LocalDateTime fechaHora, UUID exceptoTramiteId) {
+        return citas.findByClinicaIdAndFechaHoraAndEstado(clinicaId, fechaHora, "CONFIRMADA")
+                .filter(c -> exceptoTramiteId == null || !c.getTramite().getId().equals(exceptoTramiteId))
+                .isPresent();
+    }
+
+    /** Horas ocupadas ("HH:mm") de una clinica en un dia, por citas CONFIRMADAS. */
+    @Transactional(readOnly = true)
+    public List<String> horasOcupadasDelDia(Long clinicaId, java.time.LocalDate fecha) {
+        java.time.LocalDateTime desde = fecha.atStartOfDay();
+        java.time.LocalDateTime hasta = fecha.plusDays(1).atStartOfDay();
+        return citas.findByClinicaIdAndFechaHoraBetween(clinicaId, desde, hasta).stream()
+                .filter(c -> "CONFIRMADA".equals(c.getEstado()))
+                .map(c -> c.getFechaHora().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")))
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     /**
@@ -173,8 +228,9 @@ public class TramiteService {
     /** Recupera un tramite por otro canal: no cambia el estado, solo deja constancia y devuelve el contexto. */
     public Tramite recuperar(UUID tramiteId, String canal) {
         Tramite tramite = buscar(tramiteId);
-        if (tramite.getEstado() == EstadoTramite.ATENDIDO) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "El tramite ya fue atendido, no se puede recuperar");
+        if (ESTADOS_TERMINALES.contains(tramite.getEstado())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "El tramite ya esta cerrado (" + tramite.getEstado() + "), no se puede recuperar");
         }
         String canalReal = canal == null || canal.isBlank() ? tramite.getCanalOrigen() : canal;
         eventos.registrar(tramite.getId(), TipoEvento.TRAMITE_RECUPERADO, canalReal, "SISTEMA",
@@ -198,17 +254,83 @@ public class TramiteService {
         return tramite;
     }
 
+    /**
+     * Check-in del doctor: el paciente llego a la clinica. Solo deja
+     * constancia en el log (evento CHECK_IN); el estado sigue
+     * CONFIRMADO hasta que se marque atendido / no presentado /
+     * no realizado. Se puede registrar una sola vez por tramite.
+     */
+    public Tramite registrarCheckIn(UUID tramiteId) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEstado(tramite, EstadoTramite.CONFIRMADO);
+        if (eventos.tieneEvento(tramiteId, TipoEvento.CHECK_IN)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "El check-in del folio " + tramite.getFolio() + " ya esta registrado");
+        }
+        eventos.registrar(tramite.getId(), TipoEvento.CHECK_IN, "CLINICA", "DOCTOR",
+                json(Map.of("folio", tramite.getFolio())));
+        return tramite;
+    }
+
+    /** El paciente no se presento a su cita confirmada: estado terminal, sale de los activos. */
+    public Tramite marcarNoPresentado(UUID tramiteId) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEstado(tramite, EstadoTramite.CONFIRMADO);
+        tramite.setEstado(EstadoTramite.NO_PRESENTADO);
+        tramite = tramites.save(tramite);
+        citas.findByTramiteId(tramiteId).ifPresent(cita -> {
+            cita.setEstado("NO_PRESENTADO");
+            citas.save(cita);
+        });
+        eventos.registrar(tramite.getId(), TipoEvento.NO_PRESENTADO, "CLINICA", "DOCTOR",
+                json(Map.of("folio", tramite.getFolio())));
+        return tramite;
+    }
+
+    /**
+     * El estudio no se pudo realizar: el doctor apunta el motivo
+     * (texto libre, obligatorio). Queda en el log de eventos y en el
+     * journey del folio; el estado es terminal, sale de los activos.
+     */
+    public Tramite marcarNoRealizado(UUID tramiteId, String motivo) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEstado(tramite, EstadoTramite.CONFIRMADO);
+        if (motivo == null || motivo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El motivo es obligatorio: apunta por que no se pudo realizar el estudio");
+        }
+        tramite.setEstado(EstadoTramite.NO_REALIZADO);
+        tramite = tramites.save(tramite);
+        citas.findByTramiteId(tramiteId).ifPresent(cita -> {
+            cita.setEstado("NO_REALIZADO");
+            citas.save(cita);
+        });
+        eventos.registrar(tramite.getId(), TipoEvento.NO_REALIZADO, "CLINICA", "DOCTOR",
+                json(Map.of("folio", tramite.getFolio(), "motivo", motivo.trim())));
+        return tramite;
+    }
+
     @Transactional(readOnly = true)
     public Tramite buscar(UUID tramiteId) {
         return tramites.findById(tramiteId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tramite no encontrado: " + tramiteId));
     }
 
-    /** Busca un tramite por su folio legible (SD-2026-XXXX). 404 si no existe. */
+    /** Busca un tramite por su folio legible (SD-2026-XXXX). 404 si no existe.
+     * El folio se normaliza (espacios y minusculas) para que "sd-2026-0012" funcione igual. */
     @Transactional(readOnly = true)
     public Tramite buscarPorFolio(String folio) {
-        return tramites.findByFolio(folio)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tramite no encontrado con folio " + folio));
+        String normalizado = folio == null ? "" : folio.trim().toUpperCase();
+        return tramites.findByFolio(normalizado)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tramite no encontrado con folio " + normalizado));
+    }
+
+    /** El tramite por folio como mapa plano (mismo formato que el journey):
+     * el endpoint /tramites/folio/{folio} ya no devuelve la entidad JPA
+     * con su paciente LAZY, sino datos resueltos. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> buscarPorFolioComoMapa(String folio) {
+        return tramiteComoMapa(buscarPorFolio(folio));
     }
 
     /** Todos los tramites en un estado dado, para la recepcion de clinica y tableros. */
@@ -249,8 +371,23 @@ public class TramiteService {
                     clinicaNombre,
                     clinicaCiudad,
                     t.getFechaCita(),
-                    t.getEstado().name());
+                    t.getEstado().name(),
+                    eventos.tieneEvento(t.getId(), TipoEvento.CHECK_IN));
         }).toList();
+    }
+
+    /**
+     * Citas confirmadas de un dia (por defecto hoy), para el tablero
+     * del doctor: folio, paciente, estudio, clinica, fecha/hora y si
+     * ya se registro el check-in. Solo CONFIRMADO.
+     */
+    @Transactional(readOnly = true)
+    public List<CitaClinicaDTO> listarCitasDoctor(java.time.LocalDate fecha) {
+        java.time.LocalDate dia = fecha == null ? java.time.LocalDate.now() : fecha;
+        return listarCitasClinica(EstadoTramite.CONFIRMADO).stream()
+                .filter(c -> c.fechaCita() != null && c.fechaCita().toLocalDate().equals(dia))
+                .sorted(java.util.Comparator.comparing(CitaClinicaDTO::fechaCita))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -258,13 +395,17 @@ public class TramiteService {
         return tramites.findAll();
     }
 
+    /** Estados terminales: el tramite ya se cerro y no vuelve a la lista de activos. */
+    public static final List<EstadoTramite> ESTADOS_TERMINALES =
+            List.of(EstadoTramite.ATENDIDO, EstadoTramite.NO_PRESENTADO, EstadoTramite.NO_REALIZADO);
+
     /**
-     * Tramites activos (no atendidos) de un paciente, del mas reciente al mas viejo.
+     * Tramites activos (no terminales) de un paciente, del mas reciente al mas viejo.
      * Un paciente puede tener varios folios activos a la vez, uno por estudio.
      */
     @Transactional(readOnly = true)
     public List<Tramite> listarActivosDe(UUID pacienteId) {
-        return tramites.findByPacienteIdAndEstadoNotOrderByCreatedAtDesc(pacienteId, EstadoTramite.ATENDIDO);
+        return tramites.findByPacienteIdAndEstadoNotInOrderByCreatedAtDesc(pacienteId, ESTADOS_TERMINALES);
     }
 
     @Transactional(readOnly = true)
@@ -389,6 +530,7 @@ public class TramiteService {
             case CLINICA_SELECCIONADA -> "CONFIRMAR_CITA";
             case CONFIRMADO -> "ACUDIR_A_CITA";
             case ATENDIDO -> "TRAMITE_COMPLETADO";
+            case NO_PRESENTADO, NO_REALIZADO -> "TRAMITE_CERRADO";
         };
     }
 

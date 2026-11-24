@@ -23,11 +23,28 @@ const INDICE_PASO: Record<string, number> = {
   CLINICA_SELECCIONADA: 2,
   CONFIRMADO: 3,
   ATENDIDO: 4,
+  // Llegaron a CONFIRMADO: el cierre es terminal, no un paso más.
+  NO_PRESENTADO: 3,
+  NO_REALIZADO: 3,
 };
 
 /** Pasos realizados y faltantes de un folio, derivados de su estado y
     de sus datos pendientes (sin pedir el timeline: lo simple y correcto). */
 function pasosDe(t: Tramite): { realizados: string[]; faltantes: string[] } {
+  // Cierres terminales: los 4 primeros pasos + la etiqueta de cierre,
+  // y nada faltante (el trámite ya terminó).
+  if (t.estado === 'NO_PRESENTADO') {
+    return {
+      realizados: [...PASOS_FLUJO.slice(0, 4).map((p) => p.etiqueta), 'No se presentó a la cita'],
+      faltantes: [],
+    };
+  }
+  if (t.estado === 'NO_REALIZADO') {
+    return {
+      realizados: [...PASOS_FLUJO.slice(0, 4).map((p) => p.etiqueta), 'No se pudo realizar el estudio'],
+      faltantes: [],
+    };
+  }
   const idx = INDICE_PASO[t.estado] ?? 0;
   const realizados = PASOS_FLUJO.slice(0, idx + 1).map((p) => p.etiqueta);
   const faltantes = PASOS_FLUJO.slice(idx + 1).map((p) => p.etiqueta);

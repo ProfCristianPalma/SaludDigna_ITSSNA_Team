@@ -9,6 +9,7 @@ import java.util.UUID;
 import mx.saluddigna.omnicanal.eventos.EventoService;
 import mx.saluddigna.omnicanal.eventos.domain.Evento;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -60,10 +61,48 @@ public class TramiteController {
         return service.buscar(id);
     }
 
-    /** Trámite por folio legible, ej. SD-2026-0001 (el {id} de arriba solo acepta UUID). */
+    /** Trámite por folio legible, ej. SD-2026-0001 (el {id} de arriba solo acepta UUID).
+     * Devuelve el mapa plano (paciente/estudio/clínica resueltos), no la entidad JPA:
+     * el asesor y el admin buscaban por folio y la entidad cruda era frágil al serializar. */
     @GetMapping("/tramites/folio/{folio}")
-    public Tramite buscarPorFolio(@PathVariable String folio) {
-        return service.buscarPorFolio(folio);
+    public Map<String, Object> buscarPorFolio(@PathVariable String folio) {
+        return service.buscarPorFolioComoMapa(folio);
+    }
+
+    /**
+     * Disponibilidad sin empalmes: ¿el hueco (clínica, fecha, hora) ya está
+     * ocupado por otra cita CONFIRMADA? GET /api/disponibilidad?clinicaId=1&fechaHora=2026-11-25T10:00
+     * (fechaHora en ISO). `exceptoTramiteId` excluye la cita propia al reconfirmar.
+     */
+    @GetMapping("/disponibilidad")
+    public Map<String, Object> disponibilidad(
+            @RequestParam Long clinicaId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime fechaHora,
+            @RequestParam(required = false) UUID exceptoTramiteId) {
+        boolean ocupado = service.huecoOcupado(clinicaId, fechaHora, exceptoTramiteId);
+        return Map.of("clinicaId", clinicaId, "fechaHora", fechaHora.toString(), "ocupado", ocupado);
+    }
+
+    /**
+     * Horas ocupadas ("HH:mm") de una clínica en un día.
+     * GET /api/disponibilidad/dia?clinicaId=1&fecha=2026-11-25 (fecha en ISO AAAA-MM-DD).
+     */
+    @GetMapping("/disponibilidad/dia")
+    public Map<String, Object> horasOcupadas(
+            @RequestParam Long clinicaId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate fecha) {
+        return Map.of("clinicaId", clinicaId, "fecha", fecha.toString(),
+                "horasOcupadas", service.horasOcupadasDelDia(clinicaId, fecha));
+    }
+
+    /**
+     * Tablero del doctor: citas CONFIRMADAS de un día (por defecto hoy).
+     * GET /api/doctor/citas?fecha=2026-11-25 (fecha en ISO AAAA-MM-DD).
+     */
+    @GetMapping("/doctor/citas")
+    public List<CitaClinicaDTO> citasDoctor(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate fecha) {
+        return service.listarCitasDoctor(fecha);
     }
 
     /**
@@ -114,6 +153,27 @@ public class TramiteController {
     @PostMapping("/tramites/{id}/atender")
     public Tramite atender(@PathVariable UUID id) {
         return service.concluirAtencion(id);
+    }
+
+    public record MotivoRequest(String motivo) {
+    }
+
+    /** Doctor: registra el check-in del paciente (CONFIRMADO, sin cambiar el estado). */
+    @PostMapping("/tramites/{id}/check-in")
+    public Tramite checkIn(@PathVariable UUID id) {
+        return service.registrarCheckIn(id);
+    }
+
+    /** Doctor: el paciente no se presentó a su cita (CONFIRMADO → NO_PRESENTADO, terminal). */
+    @PostMapping("/tramites/{id}/no-presentado")
+    public Tramite noPresentado(@PathVariable UUID id) {
+        return service.marcarNoPresentado(id);
+    }
+
+    /** Doctor: el estudio no se pudo realizar (CONFIRMADO → NO_REALIZADO, terminal). El motivo es obligatorio. */
+    @PostMapping("/tramites/{id}/no-realizado")
+    public Tramite noRealizado(@PathVariable UUID id, @RequestBody MotivoRequest req) {
+        return service.marcarNoRealizado(id, req == null ? null : req.motivo());
     }
 
     @PostMapping("/tramites/{id}/completar-dato")

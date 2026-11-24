@@ -22,6 +22,8 @@ const PASO_LABEL: Record<EstadoTramite, string> = {
   CLINICA_SELECCIONADA: 'Clínica seleccionada',
   CONFIRMADO: 'Confirmado',
   ATENDIDO: 'Atendido',
+  NO_PRESENTADO: 'No se presentó',
+  NO_REALIZADO: 'No realizado',
   CANCELADO: 'Cancelado',
 };
 

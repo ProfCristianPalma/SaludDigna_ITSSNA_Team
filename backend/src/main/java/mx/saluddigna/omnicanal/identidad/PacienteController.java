@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -65,5 +66,25 @@ public class PacienteController {
     @GetMapping("/{id}")
     public Paciente buscarPorId(@PathVariable UUID id) {
         return service.buscarPorId(id);
+    }
+
+    public record ActualizarPacienteRequest(
+            String nombre,
+            String telefono,
+            String email,
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fechaNacimiento,
+            /** Folio del tramite en contexto (opcional): el cambio se registra en su log. */
+            UUID tramiteId) {
+    }
+
+    /**
+     * PUT /api/pacientes/{id} → edita nombre/teléfono/email/fecha de
+     * nacimiento (asesor / Call Center). La contraseña NO se toca
+     * desde aquí. 409 si el teléfono choca con otro paciente.
+     */
+    @PutMapping("/{id}")
+    public Paciente actualizar(@PathVariable UUID id, @RequestBody ActualizarPacienteRequest req) {
+        return service.actualizar(
+                id, req.nombre(), req.telefono(), req.email(), req.fechaNacimiento(), req.tramiteId());
     }
 }

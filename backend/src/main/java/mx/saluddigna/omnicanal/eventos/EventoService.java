@@ -33,4 +33,10 @@ public class EventoService {
     public List<Evento> listarTimeline(UUID tramiteId) {
         return repository.findByTramiteIdOrderByTimestampAsc(tramiteId);
     }
+
+    /** ¿Ya hay un evento de ese tipo en el tramite? (p. ej. check-in ya registrado). */
+    @Transactional(readOnly = true)
+    public boolean tieneEvento(UUID tramiteId, String tipo) {
+        return repository.existsByTramiteIdAndTipo(tramiteId, tipo);
+    }
 }

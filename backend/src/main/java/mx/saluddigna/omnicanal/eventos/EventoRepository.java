@@ -8,4 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface EventoRepository extends JpaRepository<Evento, UUID> {
 
     List<Evento> findByTramiteIdOrderByTimestampAsc(UUID tramiteId);
+
+    /** ¿Ya hay un evento de ese tipo en el tramite? (p. ej. check-in ya registrado). */
+    boolean existsByTramiteIdAndTipo(UUID tramiteId, String tipo);
 }

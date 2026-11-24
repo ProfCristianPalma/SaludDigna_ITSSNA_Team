@@ -29,7 +29,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 public class SecurityConfig extends OncePerRequestFilter {
 
-    public static final Set<String> ROLES_VALIDOS = Set.of("PACIENTE", "ASESOR", "ADMINISTRADOR");
+    public static final Set<String> ROLES_VALIDOS = Set.of("PACIENTE", "ASESOR", "ADMINISTRADOR", "DOCTOR");
     private static final String ORIGEN_FRONTEND = "http://localhost:5173";
 
     private final JwtService jwtService;

@@ -36,6 +36,7 @@ import org.springframework.web.server.ResponseStatusException;
  * - Pacientes en BD: teléfono a 10 dígitos + contraseña (ej. 2220000001 / ana123)
  * - asesor / asesor123 -&gt; ASESOR
  * - admin / admin123 -&gt; ADMINISTRADOR
+ * - doctor / doctor123 -&gt; DOCTOR (Alejandro Ruiz)
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -65,11 +66,11 @@ public class AuthController {
             String password) {
     }
 
-    /** paciente va solo cuando el login es de paciente; en staff es null. */
+    /** paciente va solo cuando el login es de paciente; en staff es null. `nombre` es el nombre del staff (asesor/admin/doctor) o del paciente. */
     public record AuthResponse(String token, String usuario, String rol, Paciente paciente) {
     }
 
-    public record YoResponse(Paciente paciente, String usuario, String rol) {
+    public record YoResponse(Paciente paciente, String usuario, String rol, String nombre) {
     }
 
     @PostMapping("/login")
@@ -165,9 +166,11 @@ public class AuthController {
             Paciente paciente = pacientes.findById(pacienteId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                             "El paciente de la sesión ya no existe"));
-            return new YoResponse(paciente, usuario, rol);
+            return new YoResponse(paciente, usuario, rol, paciente.getNombre());
         }
-        return new YoResponse(null, usuario, rol);
+        String nombreStaff = staff.findByUsuario(usuario.toLowerCase())
+                .map(UsuarioStaff::getNombre).orElse(usuario);
+        return new YoResponse(null, usuario, rol, nombreStaff);
     }
 
     private void validarRolPedido(String rolPedido, String rolReal) {

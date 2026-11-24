@@ -60,6 +60,8 @@ export interface PerfilYo {
   paciente: Paciente | null;
   usuario: string;
   rol: string;
+  /** Nombre del staff (p. ej. "Alejandro Ruiz" para el doctor) o del paciente. */
+  nombre: string | null;
 }
 
 const TOKEN_KEY = 'saluddigna-token';
@@ -145,7 +147,11 @@ export async function registro(input: RegistroInput): Promise<Sesion> {
 /** Perfil de la sesión actual (GET /api/auth/yo). 401 si el token no vale. */
 export async function getPerfilYo(): Promise<PerfilYo> {
   const raw = await fetchJson<PerfilYo>('/auth/yo');
-  return { ...raw, paciente: raw.paciente ? normalizarPaciente(raw.paciente) : null };
+  return {
+    ...raw,
+    nombre: raw.nombre ?? null,
+    paciente: raw.paciente ? normalizarPaciente(raw.paciente) : null,
+  };
 }
 
 /** Cierra la sesión en este navegador. */
@@ -219,6 +225,25 @@ const FOLIO_RE = /^SD-\d{4}-\d{4}$/i;
 
 export function esFolio(q: string): boolean {
   return FOLIO_RE.test(q.trim());
+}
+
+/**
+ * Normaliza una consulta a folio canónico "SD-AAAA-NNNN" (año 2026 por
+ * defecto cuando solo viene el número). Acepta "sd-2026-0012",
+ * "sd 2026 0012", "sd20260012", "2026-0012", "20260012" y "0012".
+ * Devuelve null si no parece un folio.
+ */
+export function normalizarFolio(q: string): string | null {
+  const t = q.trim().toUpperCase();
+  let m = /^SD[\s-]?(\d{4})[\s-]?(\d{4})$/.exec(t);
+  if (m) return `SD-${m[1]}-${m[2]}`;
+  m = /^(\d{4})[\s-](\d{4})$/.exec(t);
+  if (m) return `SD-${m[1]}-${m[2]}`;
+  m = /^(\d{4})(\d{4})$/.exec(t);
+  if (m) return `SD-${m[1]}-${m[2]}`;
+  m = /^(\d{4})$/.exec(t);
+  if (m) return `SD-2026-${m[1]}`;
+  return null;
 }
 
 export function esTelefono(q: string): boolean {
@@ -306,10 +331,14 @@ export async function getClinicas(): Promise<Clinica[]> {
   }
 }
 
-/** Trámite por folio legible (GET /api/tramites/folio/{folio}). */
-/** Trámite por folio legible (GET /api/tramites/folio/{folio}). Sin fallback mock: 404 o backend caído se propagan. */
+/** Trámite por folio legible (GET /api/tramites/folio/{folio}). Sin fallback mock: 404 o backend caído se propagan. Timeout largo (15 s): el backend frío puede tardar. */
 export async function getTramitePorFolio(folio: string): Promise<Tramite> {
-  const raw = await fetchJson<Record<string, unknown>>(`/tramites/folio/${encodeURIComponent(folio.trim())}`);
+  const canonico = normalizarFolio(folio) ?? folio.trim();
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/folio/${encodeURIComponent(canonico)}`,
+    undefined,
+    ESCRITURA_TIMEOUT_MS,
+  );
   return normalizeTramite(raw);
 }
 
@@ -342,6 +371,97 @@ export async function getPacientePorTelefono(telefono: string): Promise<Paciente
   return fetchJson<Paciente>(`/pacientes?telefono=${encodeURIComponent(normalizarTelefono(telefono))}`);
 }
 
+export interface ActualizarPacienteInput {
+  nombre?: string;
+  telefono?: string;
+  email?: string;
+  /** Fecha de nacimiento en ISO AAAA-MM-DD. */
+  fechaNacimiento?: string;
+}
+
+/**
+ * Edita un paciente (PUT /api/pacientes/{id}). 409 si el teléfono choca
+ * con otro paciente. Con tramiteId el cambio queda en el log de eventos
+ * de ese trámite. La contraseña NO se toca desde aquí. Sin fallback mock.
+ */
+export async function actualizarPaciente(
+  id: string,
+  input: ActualizarPacienteInput,
+  tramiteId?: string,
+): Promise<Paciente> {
+  const body: Record<string, unknown> = { ...input };
+  if (input.telefono) body.telefono = normalizarTelefono(input.telefono);
+  if (tramiteId) body.tramiteId = tramiteId;
+  const raw = await fetchJson<Paciente>(`/pacientes/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return normalizarPaciente(raw);
+}
+
+/** Horas ocupadas ("HH:mm") de una clínica en un día (GET /api/disponibilidad/dia). */
+export async function getHorasOcupadas(clinicaId: string, fechaISO: string): Promise<string[]> {
+  const raw = await fetchJson<{ horasOcupadas?: string[] }>(
+    `/disponibilidad/dia?clinicaId=${encodeURIComponent(clinicaId)}&fecha=${encodeURIComponent(fechaISO)}`,
+  );
+  return Array.isArray(raw.horasOcupadas) ? raw.horasOcupadas : [];
+}
+
+/**
+ * ¿El hueco (clínica, fecha, hora) ya está ocupado por otra cita
+ * CONFIRMADA? GET /api/disponibilidad. `exceptoTramiteId` excluye la
+ * cita propia al reconfirmar.
+ */
+export async function verificarDisponibilidad(
+  clinicaId: string,
+  fechaHoraISO: string,
+  exceptoTramiteId?: string,
+): Promise<boolean> {
+  const params = new URLSearchParams({
+    clinicaId,
+    fechaHora: fechaHoraISO,
+    ...(exceptoTramiteId ? { exceptoTramiteId } : {}),
+  });
+  const raw = await fetchJson<{ ocupado?: boolean }>(`/disponibilidad?${params.toString()}`);
+  return raw.ocupado === true;
+}
+
+/**
+ * Citas CONFIRMADAS del doctor en un día (GET /api/doctor/citas).
+ * Sin fecha = hoy (lo decide el backend).
+ */
+export async function getCitasDoctor(fechaISO?: string): Promise<CitaClinica[]> {
+  const query = fechaISO ? `?fecha=${encodeURIComponent(fechaISO)}` : '';
+  const list = await fetchJson<CitaClinica[]>(`/doctor/citas${query}`);
+  return list.map((c) => ({ ...c, precio: c.precio == null ? null : Number(c.precio) }));
+}
+
+/** Doctor: registra el check-in del paciente (CONFIRMADO, sin cambiar el estado). 409 si ya hay check-in. */
+export async function checkInTramite(tramiteId: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(`/tramites/${encodeURIComponent(tramiteId)}/check-in`, {
+    method: 'POST',
+  });
+  return normalizeTramite(raw);
+}
+
+/** Doctor: el paciente no se presentó a su cita (CONFIRMADO → NO_PRESENTADO, terminal). */
+export async function noPresentadoTramite(tramiteId: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/no-presentado`,
+    { method: 'POST' },
+  );
+  return normalizeTramite(raw);
+}
+
+/** Doctor: el estudio no se pudo realizar (CONFIRMADO → NO_REALIZADO, terminal). 400 si el motivo está vacío. */
+export async function noRealizadoTramite(tramiteId: string, motivo: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/no-realizado`,
+    { method: 'POST', body: JSON.stringify({ motivo }) },
+  );
+  return normalizeTramite(raw);
+}
+
 /** Cita de clínica (DTO plano) para el tablero de recepción. */
 export interface CitaClinica {
   folio: string;
@@ -354,6 +474,8 @@ export interface CitaClinica {
   clinicaCiudad: string | null;
   fechaCita: string | null;
   estado: string;
+  /** ¿Ya se registró el check-in de este trámite? (del log de eventos). */
+  checkIn?: boolean;
 }
 
 /**

@@ -16,6 +16,9 @@ public interface TramiteRepository extends JpaRepository<Tramite, UUID> {
 
     List<Tramite> findByPacienteIdAndEstadoNotOrderByCreatedAtDesc(UUID pacienteId, EstadoTramite estado);
 
+    /** Tramites activos: todos menos los terminales (ATENDIDO, NO_PRESENTADO, NO_REALIZADO). */
+    List<Tramite> findByPacienteIdAndEstadoNotInOrderByCreatedAtDesc(UUID pacienteId, List<EstadoTramite> estados);
+
     Optional<Tramite> findByFolio(String folio);
 
     List<Tramite> findByEstado(EstadoTramite estado);

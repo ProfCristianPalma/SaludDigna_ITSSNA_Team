@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorTelefono, seleccionarClinica } from '../api';
-import { formatearFechaHora } from '../fechas';
+import { confirmar, cotizar, crearTramite, getClinicas, getEstudios, getHorasOcupadas, getPerfilYo, getToken, getTramitesPorTelefono, isApiError, seleccionarClinica } from '../api';
+import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import type { Clinica, Estudio, Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
@@ -26,6 +26,15 @@ export default function WebPage() {
   const [clinicaId, setClinicaId] = useState('');
   const [mensaje, setMensaje] = useState('');
   const [cargando, setCargando] = useState(false);
+
+  // Reservación (trámite en CLINICA_SELECCIONADA): fecha y hora de la
+  // cita. La fecha se escribe en el calendario o a mano en DD/MM/AAAA;
+  // ambos campos están sincronizados. La hora es un <input type="time">.
+  const [fechaISO, setFechaISO] = useState('');
+  const [fechaLatina, setFechaLatina] = useState('');
+  const [hora, setHora] = useState('');
+  const [horasOcupadas, setHorasOcupadas] = useState<string[]>([]);
+  const [cargandoHoras, setCargandoHoras] = useState(false);
 
   // Todos los folios de ese telefono, desde la BD: un folio por estudio.
   async function cargarFolios(tel: string) {
@@ -65,6 +74,37 @@ export default function WebPage() {
     }
     void prellenar();
   }, []);
+
+  // Horas ocupadas de la clínica elegida en el día elegido: se
+  // consultan al cambiar la fecha o la clínica, para bloquear la hora.
+  useEffect(() => {
+    async function cargarHoras() {
+      if (tramite?.estado !== 'CLINICA_SELECCIONADA' || !tramite.clinica || !fechaISO) {
+        setHorasOcupadas([]);
+        return;
+      }
+      setCargandoHoras(true);
+      try {
+        setHorasOcupadas(await getHorasOcupadas(tramite.clinica.id, fechaISO));
+      } catch {
+        setHorasOcupadas([]);
+      } finally {
+        setCargandoHoras(false);
+      }
+    }
+    void cargarHoras();
+  }, [tramite?.estado, tramite?.clinica?.id, fechaISO]);
+
+  function fijarFechaISO(iso: string) {
+    setFechaISO(iso);
+    setFechaLatina(iso ? formatearFecha(iso) : '');
+  }
+
+  function fijarFechaLatina(texto: string) {
+    setFechaLatina(texto);
+    // Solo se sincroniza el calendario cuando la fecha manual es real.
+    if (esFechaLatinaValida(texto)) setFechaISO(parsearFechaLatina(texto) ?? '');
+  }
 
   const estudioSeleccionado = estudios.find((e) => e.id === estudioId);
 
@@ -155,6 +195,38 @@ export default function WebPage() {
     }
   }
 
+  async function handleConfirmar() {
+    if (!tramite || !fechaISO || !hora) return;
+    if (!esFechaLatinaValida(fechaLatina) && fechaLatina) {
+      setMensaje('La fecha no es válida. Escríbela como DD/MM/AAAA, por ejemplo 25/11/2026.');
+      return;
+    }
+    if (horasOcupadas.includes(hora)) {
+      setMensaje(`La hora ${hora} ya está ocupada en esa clínica ese día. Elige otra hora.`);
+      return;
+    }
+    setCargando(true);
+    try {
+      const fechaHoraISO = `${fechaISO}T${hora}:00`;
+      const confirmado = await confirmar(tramite.id, fechaHoraISO);
+      setTramite(confirmado);
+      setMensaje(
+        `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,
+      );
+      await cargarFolios(sesionPaciente?.telefono ?? telefono);
+    } catch (err) {
+      // 409 (hueco ocupado) o 400 (fecha/hora pasada): el mensaje del
+      // backend se muestra tal cual, sin inventar otro.
+      setMensaje(
+        isApiError(err)
+          ? err.message
+          : 'No se pudo confirmar la reservación: el backend no respondió y no se guardó nada.',
+      );
+    } finally {
+      setCargando(false);
+    }
+  }
+
   function handleInterrumpir() {
     if (!tramite) return;
     window.sessionStorage.setItem(FOLIO_KEY, tramite.folio);
@@ -165,7 +237,7 @@ export default function WebPage() {
 
   return (
     <div>
-      <h1>Cotiza tu estudio en línea</h1>
+      <h1>Reserva tu estudio en línea</h1>
       <p className="muted">Un paciente, una sola conversación: empieza aquí y continúa en cualquier canal.</p>
 
       <div className="grid-2">
@@ -211,14 +283,14 @@ export default function WebPage() {
               </p>
             )}
             <button type="submit" className="btn btn-primary" disabled={cargando}>
-              {cargando ? 'Cotizando…' : 'Cotizar'}
+              {cargando ? 'Reservando…' : 'Reservación'}
             </button>
           </form>
         </section>
 
         <section className="card">
-          <h2>2 · Tu cotización</h2>
-          {!tramite && <p className="muted">Aún no hay cotización. Completa el formulario y presiona Cotizar.</p>}
+          <h2>DATOS DE LA RESERVACIÓN</h2>
+          {!tramite && <p className="muted">Aún no hay reservación. Completa el formulario y presiona Reservación.</p>}
           {tramite && (
             <div>
               <p>
@@ -244,6 +316,62 @@ export default function WebPage() {
                 </button>
               </div>
               {tramite.clinica && <p>Clínica: <strong>{tramite.clinica.nombre}</strong> ({tramite.clinica.ciudad})</p>}
+
+              {tramite.estado === 'CLINICA_SELECCIONADA' && (
+                <>
+                  <h3>Elige fecha y hora de tu cita</h3>
+                  <div className="form">
+                    <label>
+                      Fecha (calendario)
+                      <input type="date" value={fechaISO} onChange={(e) => fijarFechaISO(e.target.value)} />
+                    </label>
+                    <label>
+                      Fecha (DD/MM/AAAA)
+                      <input
+                        type="text"
+                        value={fechaLatina}
+                        onChange={(e) => fijarFechaLatina(e.target.value)}
+                        placeholder="25/11/2026"
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <label>
+                      Hora
+                      <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} />
+                    </label>
+                  </div>
+                  {fechaISO && tramite.clinica && (
+                    <p className="muted">
+                      {cargandoHoras
+                        ? 'Consultando horas ocupadas…'
+                        : horasOcupadas.length > 0
+                          ? `Horas ocupadas: ${horasOcupadas.join(', ')}`
+                          : 'Horas ocupadas: ninguna, el día está libre.'}
+                    </p>
+                  )}
+                  {hora && horasOcupadas.includes(hora) && (
+                    <p className="notice" role="alert">
+                      La hora {hora} ya está ocupada en esa clínica ese día. Elige otra hora.
+                    </p>
+                  )}
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handleConfirmar()}
+                      disabled={!fechaISO || !hora || horasOcupadas.includes(hora) || cargando}
+                    >
+                      Confirmar reservación
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {tramite.estado === 'CONFIRMADO' && tramite.fechaCita && (
+                <p>
+                  Cita confirmada: <strong>{formatearFechaHora(tramite.fechaCita)}</strong>
+                </p>
+              )}
 
               <div className="actions">
                 <button type="button" className="btn btn-ghost" onClick={handleInterrumpir}>

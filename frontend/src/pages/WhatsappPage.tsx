@@ -76,7 +76,7 @@ export default function WhatsappPage() {
     finRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensajes]);
 
-  async function handleEnviar(e: React.FormEvent, textoForzado?: string) {
+  async function handleEnviar(e: React.FormEvent, textoForzado?: string, sinFolio = false) {
     e.preventDefault();
     const limpio = (textoForzado ?? texto).trim();
     if (!limpio) return;
@@ -85,10 +85,15 @@ export default function WhatsappPage() {
     setTexto('');
     setEnviando(true);
     try {
-      const res = await enviarWhatsapp(telefono, limpio, folioActivo ?? undefined);
+      const res = await enviarWhatsapp(telefono, limpio, sinFolio ? undefined : folioActivo ?? undefined);
       if (res.tramite) {
         setTramite(res.tramite);
         setFolioActivo(res.tramite.folio);
+      } else if ((res.tramites ?? []).length > 0) {
+        // Respuesta de lista (tramite null, tramites no vacío): el bot
+        // ya no sigue un folio en concreto, se limpia el contexto.
+        setTramite(null);
+        setFolioActivo(null);
       }
       setTramites(res.tramites ?? []);
       setOpciones(res.opciones ?? []);
@@ -101,6 +106,15 @@ export default function WhatsappPage() {
     } finally {
       setEnviando(false);
     }
+  }
+
+  // "Cambiar de folio": manda "volver" SIN el folio en contexto para
+  // que el bot liste los folios, y limpia el folio activo en el front.
+  async function handleCambiarFolio(e: React.MouseEvent) {
+    e.preventDefault();
+    setFolioActivo(null);
+    setTramite(null);
+    await handleEnviar(e as unknown as React.FormEvent, 'volver', true);
   }
 
   // Si se llegó desde Historial con un folio, se manda solo una vez,
@@ -135,6 +149,16 @@ export default function WhatsappPage() {
             <small>en línea · responde al instante</small>
           </div>
           {tramite && <EstadoBadge estado={tramite.estado} />}
+          {folioActivo && (
+            <button
+              type="button"
+              className="btn btn-small btn-secondary"
+              onClick={handleCambiarFolio}
+              style={{ marginLeft: 'auto' }}
+            >
+              Cambiar de folio
+            </button>
+          )}
         </div>
 
         <div className="wa-body">

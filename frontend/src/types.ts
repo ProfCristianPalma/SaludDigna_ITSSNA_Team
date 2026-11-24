@@ -5,6 +5,8 @@ export type EstadoTramite =
   | 'CLINICA_SELECCIONADA'
   | 'CONFIRMADO'
   | 'ATENDIDO'
+  | 'NO_PRESENTADO'
+  | 'NO_REALIZADO'
   | 'CANCELADO';
 
 export type Canal = 'WEB' | 'WHATSAPP' | 'CALL_CENTER' | 'APP' | 'CLINICA';

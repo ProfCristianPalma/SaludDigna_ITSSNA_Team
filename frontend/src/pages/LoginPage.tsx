@@ -16,7 +16,9 @@ export default function LoginPage() {
     try {
       const sesion = await login(usuario, password);
       // Cada quien a su lugar: el personal a su consola, el paciente a su App.
-      if (sesion.rol === 'ASESOR' || sesion.rol === 'ADMINISTRADOR') {
+      if (sesion.rol === 'DOCTOR') {
+        navigate('/doctor');
+      } else if (sesion.rol === 'ASESOR' || sesion.rol === 'ADMINISTRADOR') {
         navigate('/asesor');
       } else {
         navigate('/app');
@@ -83,6 +85,7 @@ export default function LoginPage() {
           <li>María Fernanda Ruiz — <code>2224445566</code> — <code>maria123</code></li>
           <li>Asesor — usuario <code>asesor</code> — <code>asesor123</code></li>
           <li>Admin — usuario <code>admin</code> — <code>admin123</code></li>
+          <li>Doctor — usuario <code>doctor</code> — <code>doctor123</code></li>
         </ul>
       </section>
     </div>
