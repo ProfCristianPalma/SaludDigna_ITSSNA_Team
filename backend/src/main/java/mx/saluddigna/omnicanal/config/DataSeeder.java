@@ -2,7 +2,6 @@ package mx.saluddigna.omnicanal.config;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import mx.saluddigna.omnicanal.catalogo.ClinicaRepository;
@@ -31,7 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
  * para que el asesor, WhatsApp y el Journey tengan casos que mostrar:
  * - Ana Garcia Lopez      2220000001  GALA900514MDFRPN00  COTIZADO              (ana123)
  * - Luis Hernandez Torres 2221112233  HETL850322HDFRRS01  CLINICA_SELECCIONADA  (luis123)
- * - Maria Fernanda Ruiz   2224445566  RUXF920809MDFZXR02  CONFIRMADO (cita 24/11/2026 10:00) (maria123)
+ * - Maria Fernanda Ruiz   2224445566  RUXF920809MDFZXR02  CONFIRMADO (cita al dia siguiente, 10:00) (maria123)
  * - Carlos Mendoza Vega   2387778899  MEVC781130HDFNGR03  ATENDIDO              (carlos123)
  * - Fernanda Lopez Diaz   2229990011  LODF010617MDFPZR04  DATOS_PENDIENTES      (fernanda123)
  * Contraseñas demo = primer nombre en minúsculas + 123, guardadas como
@@ -105,19 +104,24 @@ public class DataSeeder implements CommandLineRunner {
         }
 
         // 3. Maria — CONFIRMADO
+        // La cita semilla es RELATIVA (manana 10:00): con fecha fija el
+        // seeder tumbaba el arranque en cuanto la fecha quedaba en el
+        // pasado, porque confirmar() rechaza citas pasadas (regla real).
         Paciente maria = paciente("Maria Fernanda Ruiz", "2224445566", "maria.demo@saluddigna.test", LocalDate.of(1992, 8, 9), "maria123", "RUXF920809MDFZXR02");
         Tramite tMaria = tramiteCotizado(maria, radiografia);
         if (tMaria != null && tMaria.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tMaria.getId(), tehuacan.getId());
-            tramiteService.confirmar(tMaria.getId(), LocalDateTime.of(2026, 11, 24, 10, 0));
+            tramiteService.confirmar(tMaria.getId(), LocalDate.now().plusDays(1).atTime(10, 0));
         }
 
-        // 4. Carlos — ATENDIDO
+        // 4. Carlos — ATENDIDO (cita semilla relativa: manana 09:00,
+        // misma razon que Maria: la fecha fija 23/11/2026 09:00 ya quedo
+        // en el pasado y confirmar() la rechazaba con 400, tumbando el arranque).
         Paciente carlos = paciente("Carlos Mendoza Vega", "2387778899", "carlos.demo@saluddigna.test", LocalDate.of(1978, 11, 30), "carlos123", "MEVC781130HDFNGR03");
         Tramite tCarlos = tramiteCotizado(carlos, analisis);
         if (tCarlos != null && tCarlos.getEstado().name().equals("COTIZADO")) {
             tramiteService.seleccionarClinica(tCarlos.getId(), puebla.getId());
-            tramiteService.confirmar(tCarlos.getId(), LocalDateTime.of(2026, 11, 23, 9, 0));
+            tramiteService.confirmar(tCarlos.getId(), LocalDate.now().plusDays(1).atTime(9, 0));
             tramiteService.concluirAtencion(tCarlos.getId());
         }
 
