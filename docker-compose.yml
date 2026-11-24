@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: saluddigna-db
+    environment:
+      POSTGRES_DB: saluddigna
+      POSTGRES_USER: saluddigna
+      POSTGRES_PASSWORD: saluddigna
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saluddigna -d saluddigna"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: saluddigna-backend
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/saluddigna
+      DB_USER: saluddigna
+      DB_PASSWORD: saluddigna
+      JWT_SECRET: salud-digna-demo-secret-cambiar-en-produccion
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: saluddigna-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
