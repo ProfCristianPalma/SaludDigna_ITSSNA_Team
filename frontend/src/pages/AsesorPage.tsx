@@ -12,8 +12,6 @@ import {
   esTelefono,
   getClinicas,
   getEstudios,
-  getHorasOcupadas,
-  getPacientePorTelefono,
   getTimeline,
   getTramitePorFolio,
   getTramitesPorPacienteId,
@@ -22,12 +20,12 @@ import {
   isApiError,
   normalizarFolio,
   seleccionarClinica,
-  verificarDisponibilidad,
 } from '../api';
 import { esCurp, normalizarCurp, validarCurp } from '../curp';
 import type { Clinica, Estudio, Evento, Paciente, Tramite } from '../types';
 import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import EstadoBadge from '../components/EstadoBadge';
+import ParrillaHorarios from '../components/ParrillaHorarios';
 import Timeline from '../components/Timeline';
 import VistaPersonal from '../components/VistaPersonal';
 
@@ -61,11 +59,11 @@ function ContenidoAsesor() {
   const [editEmail, setEditEmail] = useState('');
   const [editandoPaciente, setEditandoPaciente] = useState(false);
 
-  // Nueva reservación por Call Center: paciente por teléfono o el del
-  // trámite buscado; estudio → clínica → fecha y hora.
+  // Nueva reservación por Call Center: paciente por CURP o el del
+  // trámite buscado; estudio → clínica → fecha y hora (parrilla).
   const [estudios, setEstudios] = useState<Estudio[]>([]);
   const [clinicas, setClinicas] = useState<Clinica[]>([]);
-  const [resTelefono, setResTelefono] = useState('');
+  const [resIdentificador, setResIdentificador] = useState('');
   const [resPaciente, setResPaciente] = useState<Paciente | null>(null);
   const [resMensaje, setResMensaje] = useState('');
   const [resEstudioId, setResEstudioId] = useState('');
@@ -74,7 +72,6 @@ function ContenidoAsesor() {
   const [resFechaISO, setResFechaISO] = useState('');
   const [resFechaLatina, setResFechaLatina] = useState('');
   const [resHora, setResHora] = useState('');
-  const [resHorasOcupadas, setResHorasOcupadas] = useState<string[]>([]);
   const [resCargando, setResCargando] = useState(false);
 
   useEffect(() => {
@@ -98,22 +95,6 @@ function ContenidoAsesor() {
     );
     setEditEmail('');
   }, [tramite]);
-
-  // Horas ocupadas de la clínica elegida en el día elegido (reservación nueva).
-  useEffect(() => {
-    async function cargarHoras() {
-      if (resTramite?.estado !== 'CLINICA_SELECCIONADA' || !resClinicaId || !resFechaISO) {
-        setResHorasOcupadas([]);
-        return;
-      }
-      try {
-        setResHorasOcupadas(await getHorasOcupadas(resClinicaId, resFechaISO));
-      } catch {
-        setResHorasOcupadas([]);
-      }
-    }
-    void cargarHoras();
-  }, [resTramite?.estado, resClinicaId, resFechaISO]);
 
   function resFijarFechaISO(iso: string) {
     setResFechaISO(iso);
@@ -283,21 +264,25 @@ function ContenidoAsesor() {
 
   async function handleBuscarPacienteReserva(e: React.FormEvent) {
     e.preventDefault();
-    const q = resTelefono.trim();
+    const q = resIdentificador.trim();
     if (!q) return;
     setResCargando(true);
     setResMensaje('');
     try {
-      // Solo con la CURP basta: no se pide teléfono. Si es CURP se
-      // busca por CURP; si no, por teléfono como antes.
-      const p = esCurp(q) ? await buscarPacientePorCurp(q) : await getPacientePorTelefono(q);
+      // Solo con la CURP basta: no se pide teléfono.
+      if (!esCurp(q)) {
+        setResPaciente(null);
+        setResMensaje('Escribe la CURP del paciente (18 caracteres). Solo con la CURP se puede reservar.');
+        return;
+      }
+      const p = await buscarPacientePorCurp(q);
       setResPaciente(p);
-      setResMensaje(`Paciente encontrado: ${p.nombre} · ${p.curp ?? p.telefono ?? 'Sin teléfono'}.`);
+      setResMensaje(`Paciente encontrado: ${p.nombre} · ${p.curp ?? 'Sin CURP'}.`);
     } catch (err) {
       setResPaciente(null);
       setResMensaje(
         isApiError(err) && err.status === 404
-          ? `No hay ningún paciente con ${esCurp(q) ? 'la CURP' : 'el teléfono'} ${q}.`
+          ? `No hay ningún paciente con la CURP ${q}.`
           : isApiError(err)
             ? `No se pudo buscar al paciente (HTTP ${err.status}: ${err.message}).`
             : 'El backend no respondió, no se pudo buscar al paciente.',
@@ -310,7 +295,7 @@ function ContenidoAsesor() {
   function usarPacienteDelTramite() {
     if (!tramite?.paciente) return;
     setResPaciente(tramite.paciente);
-    setResTelefono(tramite.paciente.curp ?? tramite.paciente.telefono ?? '');
+    setResIdentificador(tramite.paciente.curp ?? '');
     setResMensaje(`Usando al paciente del trámite ${tramite.folio}: ${tramite.paciente.nombre}.`);
   }
 
@@ -363,20 +348,9 @@ function ContenidoAsesor() {
     const fechaHoraISO = `${resFechaISO}T${resHora}:00`;
     setResCargando(true);
     try {
-      // Doble guarda: la lista del día bloquea la hora en pantalla y
-      // esta verificación consulta el hueco exacto antes de confirmar.
-      // El 409 del backend sigue siendo la última palabra y su mensaje
-      // se muestra tal cual.
-      if (resHorasOcupadas.includes(resHora)) {
-        setResMensaje(`La hora ${resHora} ya está ocupada en esa clínica ese día. Elige otra hora.`);
-        return;
-      }
-      const ocupado = await verificarDisponibilidad(resClinicaId, fechaHoraISO, resTramite.id);
-      if (ocupado) {
-        setResMensaje(`La hora ${resHora} ya está ocupada en esa clínica ese día. Elige otra hora.`);
-        setResHorasOcupadas(await getHorasOcupadas(resClinicaId, resFechaISO));
-        return;
-      }
+      // La parrilla ya bloquea las horas ocupadas en pantalla; el 409
+      // del backend sigue siendo la última palabra y su mensaje (con
+      // las horas libres cercanas) se muestra tal cual.
       const confirmado = await confirmar(resTramite.id, fechaHoraISO);
       setResTramite(confirmado);
       setResMensaje(
@@ -534,10 +508,12 @@ function ContenidoAsesor() {
         <h3>Paciente</h3>
         <form className="form-inline" onSubmit={handleBuscarPacienteReserva}>
           <input
-            value={resTelefono}
-            onChange={(e) => setResTelefono(e.target.value)}
-            placeholder="CURP o teléfono del paciente"
-            aria-label="CURP o teléfono del paciente"
+            value={resIdentificador}
+            onChange={(e) => setResIdentificador(normalizarCurp(e.target.value))}
+            placeholder="CURP del paciente"
+            aria-label="CURP del paciente"
+            maxLength={18}
+            style={{ textTransform: 'uppercase' }}
           />
           <button type="submit" className="btn btn-secondary" disabled={resCargando}>
             Buscar paciente
@@ -628,30 +604,22 @@ function ContenidoAsesor() {
                           inputMode="numeric"
                         />
                       </label>
-                      <label>
-                        Hora
-                        <input type="time" value={resHora} onChange={(e) => setResHora(e.target.value)} />
-                      </label>
                     </div>
-                    {resFechaISO && resClinicaId && (
-                      <p className="muted">
-                        {resHorasOcupadas.length > 0
-                          ? `Horas ocupadas: ${resHorasOcupadas.join(', ')}`
-                          : 'Horas ocupadas: ninguna, el día está libre.'}
-                      </p>
-                    )}
-                    {resHora && resHorasOcupadas.includes(resHora) && (
-                      <p className="notice" role="alert">
-                        La hora {resHora} ya está ocupada en esa clínica ese día. Elige otra hora.
-                      </p>
-                    )}
+                    <ParrillaHorarios
+                      clinicaId={resClinicaId}
+                      fechaISO={resFechaISO}
+                      estudioId={resEstudioId}
+                      exceptoTramiteId={resTramite.id}
+                      horaSeleccionada={resHora}
+                      onSeleccionar={setResHora}
+                    />
                     <div className="actions">
                       <button
                         type="button"
                         className="btn btn-primary"
                         onClick={() => void handleConfirmarReserva()}
                         disabled={
-                          !resFechaISO || !resHora || resHorasOcupadas.includes(resHora) || resCargando
+                          !resFechaISO || !resHora || resCargando
                         }
                       >
                         Confirmar reservación

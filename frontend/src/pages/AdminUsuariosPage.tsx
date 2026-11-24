@@ -7,13 +7,16 @@ import {
   crearUsuarioAdmin,
   eliminarStaffAdmin,
   eliminarUsuarioAdmin,
+  generarPasswordLegible,
   getPerfilYo,
   getStaffAdmin,
   getTramitePorFolio,
   getUsuariosAdmin,
   isApiError,
   normalizarFolio,
+  restablecerPasswordPaciente,
 } from '../api';
+import PasswordInput from '../components/PasswordInput';
 import type { StaffAdmin, StaffAdminInput, UsuarioAdmin, UsuarioAdminInput } from '../api';
 import type { Tramite } from '../types';
 import { esFechaLatinaValida, formatearFecha, parsearFechaLatina } from '../fechas';
@@ -61,6 +64,24 @@ function ContenidoAdminUsuarios() {
   const [fechaNacimiento, setFechaNacimiento] = useState('');
   const [password, setPassword] = useState('');
   const [guardando, setGuardando] = useState(false);
+
+  // Aviso de UNA SOLA VEZ con la contraseña recién creada o restablecida
+  // (solo vive en el estado local de esta página). Las contraseñas
+  // guardadas son hash PBKDF2 y nunca llegan al front: no hay forma de
+  // volver a mostrarlas después.
+  const [avisoPassword, setAvisoPassword] = useState<{ cuenta: string; password: string } | null>(null);
+
+  // Restablecer contraseña (paciente o staff): diálogo con input + ojo
+  // + "Generar". Al guardar se muestra la contraseña nueva una sola vez.
+  const [resetTarget, setResetTarget] = useState<{
+    tipo: 'paciente' | 'staff';
+    id: string;
+    nombre: string;
+    usuario?: string;
+    rol?: string;
+  } | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [reseteando, setReseteando] = useState(false);
 
   // Personal — cuentas de acceso (tabla usuarios_staff, V6).
   const [staff, setStaff] = useState<StaffAdmin[]>([]);
@@ -251,6 +272,9 @@ function ContenidoAdminUsuarios() {
         await crearUsuarioAdmin(input);
         setMensaje(`Usuario ${input.nombre} creado y guardado en la base de datos.`);
       }
+      // La contraseña recién puesta se muestra UNA SOLA VEZ: después
+      // solo queda el hash y no hay forma de volver a verla.
+      if (password) setAvisoPassword({ cuenta: input.nombre, password });
       limpiarFormulario();
       await cargar();
     } catch (err) {
@@ -335,6 +359,8 @@ function ContenidoAdminUsuarios() {
         await crearStaffAdmin(input);
         setMensajeStaff(`Cuenta ${input.usuario} creada y guardada en la base de datos.`);
       }
+      // La contraseña recién puesta se muestra UNA SOLA VEZ.
+      if (staffPassword) setAvisoPassword({ cuenta: input.usuario, password: staffPassword });
       limpiarFormularioStaff();
       await cargarStaff();
     } catch (err) {
@@ -368,6 +394,61 @@ function ContenidoAdminUsuarios() {
     }
   }
 
+  async function handleResetGuardar(e: React.FormEvent) {
+    e.preventDefault();
+    if (!resetTarget) return;
+    if (resetPassword.length < 6) {
+      setError('La contraseña nueva debe tener al menos 6 caracteres.');
+      return;
+    }
+    setReseteando(true);
+    setError('');
+    try {
+      if (resetTarget.tipo === 'paciente') {
+        const nueva = await restablecerPasswordPaciente(resetTarget.id, resetPassword);
+        setAvisoPassword({ cuenta: resetTarget.nombre, password: nueva });
+        setMensaje(`Contraseña de ${resetTarget.nombre} restablecida.`);
+        await cargar();
+      } else {
+        await actualizarStaffAdmin(resetTarget.id, {
+          nombre: resetTarget.nombre,
+          usuario: resetTarget.usuario ?? '',
+          rol: resetTarget.rol ?? 'ASESOR',
+          password: resetPassword,
+        });
+        setAvisoPassword({ cuenta: resetTarget.nombre, password: resetPassword });
+        setMensajeStaff(`Contraseña de ${resetTarget.nombre} restablecida.`);
+        await cargarStaff();
+      }
+      setResetTarget(null);
+      setResetPassword('');
+    } catch (err) {
+      setError(
+        isApiError(err)
+          ? `No se pudo restablecer la contraseña (HTTP ${err.status}: ${err.message}).`
+          : 'El backend no respondió, no se cambió nada. Revisa que el backend esté arriba.',
+      );
+    } finally {
+      setReseteando(false);
+    }
+  }
+
+  function abrirResetPaciente(u: UsuarioAdmin) {
+    setResetTarget({ tipo: 'paciente', id: u.id, nombre: u.nombre });
+    setResetPassword('');
+    setAvisoPassword(null);
+    setMensaje('');
+    setError('');
+  }
+
+  function abrirResetStaff(s: StaffAdmin) {
+    setResetTarget({ tipo: 'staff', id: s.id, nombre: s.nombre, usuario: s.usuario, rol: s.rol });
+    setResetPassword('');
+    setAvisoPassword(null);
+    setMensajeStaff('');
+    setErrorStaff('');
+  }
+
   const q = busqueda.trim().toLowerCase();
   const visibles = q
     ? usuarios.filter(
@@ -389,6 +470,16 @@ function ContenidoAdminUsuarios() {
 
       {mensaje && <p className="notice" role="status">{mensaje}</p>}
       {error && <p className="notice" role="alert">{error}</p>}
+
+      {avisoPassword && (
+        <p className="notice" role="status">
+          Contraseña de <strong>{avisoPassword.cuenta}</strong>: <code>{avisoPassword.password}</code> — Anótala,
+          no se volverá a mostrar. Las contraseñas guardadas son hash y no se pueden volver a ver.{' '}
+          <button type="button" className="btn btn-small" onClick={() => setAvisoPassword(null)}>
+            Entendido
+          </button>
+        </p>
+      )}
 
       <div className="card form-inline" style={{ marginBottom: 16 }}>
         <input
@@ -478,10 +569,9 @@ function ContenidoAdminUsuarios() {
           </label>
           <label>
             Contraseña {editandoId ? '(dejar vacía para no cambiarla)' : '(mínimo 6 caracteres)'}
-            <input
-              type="password"
+            <PasswordInput
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder={editandoId ? 'Sin cambio' : 'Mínimo 6 caracteres'}
               autoComplete="new-password"
             />
@@ -533,6 +623,9 @@ function ContenidoAdminUsuarios() {
                       <button type="button" className="btn btn-small" onClick={() => empezarEditar(u)}>
                         Editar
                       </button>
+                      <button type="button" className="btn btn-small" onClick={() => abrirResetPaciente(u)}>
+                        Restablecer contraseña
+                      </button>
                       <button type="button" className="btn btn-small" onClick={() => void handleEliminar(u)}>
                         Borrar
                       </button>
@@ -542,6 +635,52 @@ function ContenidoAdminUsuarios() {
               ))}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {/* Restablecer contraseña (paciente o staff): la nueva se muestra una sola vez. */}
+      {resetTarget && (
+        <section className="card" style={{ marginBottom: 16 }}>
+          <h2>Restablecer contraseña — {resetTarget.nombre}</h2>
+          <p className="muted">
+            Escribe la contraseña nueva o genera una. Al guardarla se muestra una sola vez: anótala.
+            Las contraseñas guardadas son hash y no se pueden volver a ver.
+          </p>
+          <form className="form" onSubmit={handleResetGuardar}>
+            <label>
+              Contraseña nueva (mínimo 6 caracteres)
+              <PasswordInput
+                value={resetPassword}
+                onChange={setResetPassword}
+                placeholder="Mínimo 6 caracteres"
+                autoComplete="new-password"
+                minLength={6}
+                required
+              />
+            </label>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setResetPassword(generarPasswordLegible())}
+              >
+                Generar
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={reseteando}>
+                {reseteando ? 'Guardando…' : 'Guardar nueva contraseña'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setResetTarget(null);
+                  setResetPassword('');
+                }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
         </section>
       )}
 
@@ -593,10 +732,9 @@ function ContenidoAdminUsuarios() {
           </label>
           <label>
             Contraseña {editandoStaffId ? '(dejar vacía para no cambiarla)' : '(mínimo 6 caracteres)'}
-            <input
-              type="password"
+            <PasswordInput
               value={staffPassword}
-              onChange={(e) => setStaffPassword(e.target.value)}
+              onChange={setStaffPassword}
               placeholder={editandoStaffId ? 'Sin cambio' : 'Mínimo 6 caracteres'}
               autoComplete="new-password"
             />
@@ -638,6 +776,9 @@ function ContenidoAdminUsuarios() {
                     <div className="actions">
                       <button type="button" className="btn btn-small" onClick={() => empezarEditarStaff(s)}>
                         Editar
+                      </button>
+                      <button type="button" className="btn btn-small" onClick={() => abrirResetStaff(s)}>
+                        Restablecer contraseña
                       </button>
                       <button type="button" className="btn btn-small" onClick={() => void handleEliminarStaff(s)}>
                         Borrar

@@ -21,6 +21,8 @@ public final class TipoEvento {
     public static final String NO_REALIZADO = "cita.no_realizado";
     /** Un asesor edito los datos del paciente (nombre/telefono/fecha/email). */
     public static final String PACIENTE_ACTUALIZADO = "paciente.actualizado";
+    /** Un asesor/admin restableció la contraseña del paciente (el payload NUNCA lleva la contraseña). */
+    public static final String PASSWORD_RESTABLECIDA = "password.restablecida";
 
     private TipoEvento() {
     }

@@ -65,15 +65,6 @@ export default function AppPage() {
     };
   }, [cargar]);
 
-  function abrirWhatsapp() {
-    // WhatsApp arranca con el paciente logueado. Su CURP (o su
-    // teléfono si no tiene CURP) se pasa por sessionStorage: solo vive
-    // en esta pestaña, no queda guardado.
-    if (paciente) {
-      window.sessionStorage.setItem('saluddigna-wa-telefono', paciente.curp ?? paciente.telefono ?? '');
-    }
-  }
-
   function cerrarSesion() {
     logout();
     setPaciente(null);
@@ -95,7 +86,7 @@ export default function AppPage() {
           {sinSesion ? (
             <>
               <h1>Hola 👋</h1>
-              <p className="muted">Para ver tus citas, primero inicia sesión con tu CURP o tu teléfono y tu contraseña.</p>
+              <p className="muted">Para ver tus citas, primero inicia sesión con tu CURP y tu contraseña.</p>
               <div className="actions">
                 <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
                 <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
@@ -169,7 +160,7 @@ export default function AppPage() {
               </section>
 
               <div className="actions">
-                <Link className="btn btn-primary" to="/whatsapp" onClick={abrirWhatsapp}>
+                <Link className="btn btn-primary" to="/whatsapp">
                   Abrir WhatsApp
                 </Link>
                 {tramitePrincipal && (

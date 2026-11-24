@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { getPerfilYo, getToken, getTramitesPorPacienteId, enviarWhatsapp, normalizarTelefono } from '../api';
-import { esCurp } from '../curp';
+import { enviarWhatsapp } from '../api';
+import { normalizarCurp } from '../curp';
 import { fechaMananaLatina } from '../fechas';
-import type { Paciente, Tramite } from '../types';
+import type { Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 
 interface MensajeChat {
@@ -13,68 +13,25 @@ interface MensajeChat {
   entendido?: boolean;
 }
 
-const WA_TELEFONO_KEY = 'saluddigna-wa-telefono';
-const WA_FOLIO_KEY = 'saluddigna-wa-folio';
-
 export default function WhatsappPage() {
-  // Identificador del paciente: su CURP o su teléfono. El bot lo
-  // resuelve en el backend; el front lo manda tal cual (enviarWhatsapp
-  // no normaliza una CURP a dígitos). Sin sesión y sin identificador
-  // guardado en esta pestaña, arranca VACÍO: ya no hay ningún usuario
-  // de ejemplo cargado.
+  // WhatsApp NO toma en cuenta quién inició sesión: el bot trabaja
+  // solo con la CURP que se escribe aquí. Sin CURP el bot la pide
+  // antes de tocar ningún dato del paciente. Quien escribe la CURP
+  // del paciente (una tercera persona) puede continuar su trámite.
   const [identificador, setIdentificador] = useState('');
-  const [paciente, setPaciente] = useState<Paciente | null>(null);
   const [texto, setTexto] = useState('');
   const [mensajes, setMensajes] = useState<MensajeChat[]>([
-    { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. ¿En qué te ayudo hoy? Si ya empezaste un trámite en la web, dime tu CURP, tu teléfono o tu folio y lo retomamos donde lo dejaste.' },
+    { id: 1, de: 'bot', texto: 'Hola, soy Salud Digna 👋. Para ayudarte necesito tu CURP: escríbela arriba y dime en qué te ayudo. Con tu CURP retomo tus folios donde los dejaste.' },
   ]);
   const [tramite, setTramite] = useState<Tramite | null>(null);
   const [tramites, setTramites] = useState<Tramite[]>([]);
   const [enviando, setEnviando] = useState(false);
-  const [sesionLista, setSesionLista] = useState(false);
   // Folio en contexto: se manda con CADA mensaje para que el bot no
   // tenga que adivinar con cuál de tus folios seguir.
   const [folioActivo, setFolioActivo] = useState<string | null>(null);
   // Respuestas sugeridas que devuelve el bot para el estado actual.
   const [opciones, setOpciones] = useState<string[]>([]);
   const finRef = useRef<HTMLDivElement>(null);
-  const folioAutoEnviado = useRef(false);
-
-  // Con sesión, WhatsApp arranca con EL paciente logueado: su nombre,
-  // su CURP o teléfono y sus folios. Sin sesión, el identificador
-  // arranca vacío y hay que escribirlo (o entrar desde App/Historial,
-  // que lo dejan en sessionStorage como respaldo solo para esta pestaña).
-  useEffect(() => {
-    async function cargarSesion() {
-      const guardadoTel = window.sessionStorage.getItem(WA_TELEFONO_KEY);
-      if (guardadoTel) setIdentificador(esCurp(guardadoTel) ? guardadoTel.trim().toUpperCase() : normalizarTelefono(guardadoTel));
-      if (!getToken()) return;
-      try {
-        const perfil = await getPerfilYo();
-        if (!perfil.paciente) return;
-        setPaciente(perfil.paciente);
-        setIdentificador(perfil.paciente.curp ?? perfil.paciente.telefono ?? '');
-        const lista = await getTramitesPorPacienteId(perfil.paciente.id);
-        setTramites(lista);
-        const activos = lista.filter((t) => t.estado !== 'ATENDIDO');
-        if (activos.length > 0) {
-          setMensajes((prev) => [
-            ...prev,
-            {
-              id: 2,
-              de: 'bot',
-              texto: `Hola ${perfil.paciente?.nombre.split(' ')[0]}, tienes ${activos.length} folio${activos.length > 1 ? 's' : ''} activo${activos.length > 1 ? 's' : ''}. Escribe el folio con el que quieres seguir o pulsa uno de abajo.`,
-            },
-          ]);
-        }
-      } catch {
-        // Sin sesión válida: el teléfono se queda como esté (vacío o el guardado).
-      } finally {
-        setSesionLista(true);
-      }
-    }
-    void cargarSesion();
-  }, []);
 
   useEffect(() => {
     finRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -121,28 +78,11 @@ export default function WhatsappPage() {
     await handleEnviar(e as unknown as React.FormEvent, 'volver', true);
   }
 
-  // Si se llegó desde Historial con un folio, se manda solo una vez,
-  // y solo cuando ya se cargó la sesión (si no, se mandaría con un
-  // teléfono vacío o de otra persona y el folio no pertenecería a ese teléfono).
-  useEffect(() => {
-    if (!sesionLista || folioAutoEnviado.current) return;
-    const folio = window.sessionStorage.getItem(WA_FOLIO_KEY);
-    if (!folio || !identificador) return;
-    folioAutoEnviado.current = true;
-    window.sessionStorage.removeItem(WA_FOLIO_KEY);
-    void handleEnviar(new Event('submit') as unknown as React.FormEvent, folio);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identificador, sesionLista]);
-
-  const primerNombre = paciente?.nombre.split(' ')[0];
-
   return (
     <div>
       <h1>WhatsApp — continúa tu trámite</h1>
       <p className="muted">
-        {paciente
-          ? `Hola, ${primerNombre}: el bot te reconoce por tu CURP o teléfono${paciente.curp ? ` (${paciente.curp})` : paciente.telefono ? ` (${paciente.telefono})` : ''} y tus folios.`
-          : 'El bot reconoce tus trámites por CURP o teléfono. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Si inicias sesión, arranca con tus datos.'}
+        El bot te reconoce por tu CURP: escríbela y dime en qué te ayudo. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Quien tenga tu CURP puede continuar tu trámite por ti.
       </p>
 
       <div className="wa-shell">
@@ -182,9 +122,11 @@ export default function WhatsappPage() {
         <form className="wa-form" onSubmit={handleEnviar}>
           <input
             value={identificador}
-            onChange={(e) => setIdentificador(e.target.value)}
-            placeholder="Tu CURP o teléfono"
-            aria-label="CURP o teléfono"
+            onChange={(e) => setIdentificador(normalizarCurp(e.target.value))}
+            placeholder="Escribe la CURP del paciente"
+            aria-label="CURP del paciente"
+            maxLength={18}
+            style={{ textTransform: 'uppercase' }}
           />
           <input
             value={texto}
@@ -234,7 +176,7 @@ export default function WhatsappPage() {
           <p>
             {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
           </p>
-          <p className="muted">Paciente: {tramite.paciente?.nombre ?? paciente?.nombre ?? '—'}</p>
+          <p className="muted">Paciente: {tramite.paciente?.nombre ?? '—'}</p>
         </section>
       )}
 

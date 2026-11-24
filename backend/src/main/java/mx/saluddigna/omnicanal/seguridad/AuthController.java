@@ -2,7 +2,6 @@ package mx.saluddigna.omnicanal.seguridad;
 
 import jakarta.validation.Valid;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.identidad.CurpUtil;
@@ -22,12 +21,12 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * Login y registro REALES contra Postgres (hackatón, no producción).
  *
- * Los pacientes se autentican con su CURP, su teléfono (o su primer
- * nombre, ej. "ana") + contraseña, guardada como hash PBKDF2 en
- * {@code pacientes.password_hash} (migración V4). La CURP es la llave
- * omnicanal desde V7; el teléfono es opcional. El JWT lleva el claim
- * "pacienteId" para que la App sepa quién está logueado, y su subject
- * es el teléfono si existe, si no la CURP.
+ * Los pacientes se autentican ÚNICAMENTE con su CURP + contraseña,
+ * guardada como hash PBKDF2 en {@code pacientes.password_hash}
+ * (migración V4). Ni el teléfono ni el primer nombre sirven para
+ * entrar: la CURP es la llave omnicanal desde V7. El JWT lleva el
+ * claim "pacienteId" para que la App sepa quién está logueado, y su
+ * subject es siempre la CURP.
  *
  * El staff (asesor/admin) vive en Postgres, tabla
  * {@code usuarios_staff} (migración V6), sembrado por DataSeeder y
@@ -35,7 +34,7 @@ import org.springframework.web.server.ResponseStatusException;
  * es hash PBKDF2 y su rol sale de la BD.
  *
  * Usuarios demo:
- * - Pacientes en BD: CURP o teléfono a 10 dígitos + contraseña (ej. GALA900514MDFRPN00 / ana123, 2220000001 / ana123)
+ * - Pacientes en BD: CURP + contraseña (ej. GALA900514MDFRPN00 / ana123)
  * - asesor / asesor123 -&gt; ASESOR
  * - admin / admin123 -&gt; ADMINISTRADOR
  * - doctor / doctor123 -&gt; DOCTOR (Alejandro Ruiz)
@@ -98,8 +97,13 @@ public class AuthController {
                     cuenta.getUsuario(), cuenta.getRol(), null);
         }
 
-        // (a) y (b) Paciente en BD: por CURP, por teléfono, o por primer nombre ("ana").
-        Paciente paciente = resolverPaciente(usuario)
+        // Paciente en BD: SOLO por CURP (formato válido + findByCurp).
+        // Un teléfono ("2220000001") o un primer nombre ("ana") ya no
+        // resuelven a nadie: el error es el 401 genérico de siempre.
+        if (!CurpUtil.esFormatoValido(usuario)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Usuario o contraseña incorrectos");
+        }
+        Paciente paciente = pacientes.findByCurp(CurpUtil.normalizar(usuario))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                         "Usuario o contraseña incorrectos"));
         if (paciente.getPasswordHash() == null
@@ -204,11 +208,8 @@ public class AuthController {
         return pacientes.save(paciente);
     }
 
-    /** Identificador de sesión del paciente: su teléfono si tiene, si no su CURP (nunca null tras el registro). */
+    /** Identificador de sesión del paciente: siempre su CURP. */
     private static String usuarioSesion(Paciente paciente) {
-        if (paciente.getTelefono() != null && !paciente.getTelefono().isBlank()) {
-            return paciente.getTelefono();
-        }
         return paciente.getCurp();
     }
 
@@ -239,31 +240,5 @@ public class AuthController {
         if (rolPedido != null && !rolPedido.isBlank() && !rolPedido.equalsIgnoreCase(rolReal)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "El rol no corresponde a este usuario");
         }
-    }
-
-    /**
-     * Resuelve un paciente por CURP, por teléfono exacto, o por primer
-     * nombre ("ana" -&gt; Ana García López). Una CURP con formato válido
-     * que no existe no cae al nombre: es un usuario inexistente (401
-     * genérico). Un teléfono se reconoce porque tiene al menos 7 dígitos.
-     */
-    private Optional<Paciente> resolverPaciente(String usuario) {
-        if (CurpUtil.esFormatoValido(usuario)) {
-            return pacientes.findByCurp(CurpUtil.normalizar(usuario));
-        }
-        String digitos = usuario.replaceAll("\\D", "");
-        if (digitos.length() >= 7) {
-            // Telefono normalizado a 10 digitos: "+52 222..." y "222..." son el mismo paciente.
-            Optional<Paciente> porTelefono = pacientes.findByTelefono(
-                    mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(usuario));
-            if (porTelefono.isPresent()) {
-                return porTelefono;
-            }
-        }
-        List<Paciente> porNombre = pacientes.findByNombreContainingIgnoreCase(usuario);
-        return porNombre.stream()
-                .filter(p -> p.getNombre().split(" ")[0].equalsIgnoreCase(usuario))
-                .findFirst()
-                .or(() -> porNombre.stream().findFirst());
     }
 }

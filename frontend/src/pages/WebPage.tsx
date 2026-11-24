@@ -1,22 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { confirmar, cotizar, crearTramite, getClinicas, getEstudios, getHorasOcupadas, getPerfilYo, getToken, getTramitesPorPacienteId, getTramitesPorTelefono, isApiError, seleccionarClinica } from '../api';
+import { buscarPacientePorCurp, confirmar, cotizar, crearTramite, getClinicas, getEstudios, getPerfilYo, getToken, getTramitesPorPacienteId, isApiError, seleccionarClinica } from '../api';
+import { esCurp, normalizarCurp, validarCurp } from '../curp';
 import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import type { Clinica, Estudio, Paciente, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
+import ParrillaHorarios from '../components/ParrillaHorarios';
 
 const FOLIO_KEY = 'saluddigna-folio';
 
 export default function WebPage() {
   // Sin sesión, el formulario arranca VACÍO: ya no hay ningún usuario
   // de ejemplo cargado. Con sesión de paciente, los datos vienen de la
-  // sesión (nombre, teléfono y fecha de nacimiento) y NO se muestran
-  // como editables: el formulario de cotizar ya no tiene fecha de
-  // nacimiento y, con sesión, tampoco nombre ni teléfono editables.
-  // Sin sesión se cotiza solo con nombre y teléfono (la fecha es
-  // nullable en la BD y el backend resuelve por teléfono).
+  // sesión (nombre, CURP y teléfono) y NO se muestran como editables.
+  // Sin sesión se cotiza con nombre y CURP obligatoria (el teléfono es
+  // opcional); el backend resuelve o crea al paciente solo por CURP.
   const [sesionPaciente, setSesionPaciente] = useState<Paciente | null>(null);
   const [nombre, setNombre] = useState('');
+  const [curp, setCurp] = useState('');
   const [telefono, setTelefono] = useState('');
   const [estudios, setEstudios] = useState<Estudio[]>([]);
   const [clinicas, setClinicas] = useState<Clinica[]>([]);
@@ -29,17 +30,22 @@ export default function WebPage() {
 
   // Reservación (trámite en CLINICA_SELECCIONADA): fecha y hora de la
   // cita. La fecha se escribe en el calendario o a mano en DD/MM/AAAA;
-  // ambos campos están sincronizados. La hora es un <input type="time">.
+  // ambos campos están sincronizados. La hora se elige en la parrilla
+  // (slots de 30 min, 07:00–16:30, con las ocupadas deshabilitadas).
   const [fechaISO, setFechaISO] = useState('');
   const [fechaLatina, setFechaLatina] = useState('');
   const [hora, setHora] = useState('');
-  const [horasOcupadas, setHorasOcupadas] = useState<string[]>([]);
-  const [cargandoHoras, setCargandoHoras] = useState(false);
+
+  // Datos efectivos del paciente: de la sesión si la hay, del
+  // formulario si no. Con sesión el paciente puede no tener teléfono:
+  // entonces se cotiza por su pacienteId y sus folios se listan por id.
+  const curpEfectiva = sesionPaciente?.curp ?? curp;
+  const telefonoEfectivo = sesionPaciente?.telefono ?? (telefono.trim() || null);
 
   // Todos los folios de ese paciente, desde la BD: un folio por estudio.
-  // Con sesión se cargan por id (el paciente puede no tener teléfono);
-  // sin sesión, por el teléfono del formulario.
-  async function cargarFolios(tel: string | null | undefined, pacienteId?: string) {
+  // Con sesión se cargan por id; sin sesión, se resuelve el paciente
+  // por su CURP y luego sus folios por id.
+  async function cargarFolios(pacienteId?: string, curpPaciente?: string) {
     if (pacienteId) {
       try {
         setMisFolios(await getTramitesPorPacienteId(pacienteId));
@@ -48,9 +54,13 @@ export default function WebPage() {
       }
       return;
     }
-    if (!tel?.trim()) return;
+    if (!curpPaciente?.trim() || !esCurp(curpPaciente)) {
+      setMisFolios([]);
+      return;
+    }
     try {
-      setMisFolios(await getTramitesPorTelefono(tel));
+      const p = await buscarPacientePorCurp(curpPaciente);
+      setMisFolios(await getTramitesPorPacienteId(p.id));
     } catch {
       setMisFolios([]);
     }
@@ -66,7 +76,7 @@ export default function WebPage() {
     if (guardado) setMensaje(`Tienes un trámite guardado en esta pestaña: ${guardado}. Puedes retomarlo en WhatsApp o en Journey.`);
     // Si hay sesión de paciente, los datos de cotización son LOS DE LA
     // SESIÓN. Sin sesión (o sesión de staff), el formulario se queda
-    // vacío y se cotiza solo con nombre y teléfono.
+    // vacío y se cotiza con nombre y CURP.
     async function prellenar() {
       if (!getToken()) return;
       try {
@@ -75,7 +85,8 @@ export default function WebPage() {
           setSesionPaciente(perfil.paciente);
           setNombre(perfil.paciente.nombre);
           setTelefono(perfil.paciente.telefono ?? '');
-          void cargarFolios(perfil.paciente.telefono, perfil.paciente.id);
+          setCurp(perfil.paciente.curp ?? '');
+          void cargarFolios(perfil.paciente.id);
           return;
         }
       } catch {
@@ -84,26 +95,6 @@ export default function WebPage() {
     }
     void prellenar();
   }, []);
-
-  // Horas ocupadas de la clínica elegida en el día elegido: se
-  // consultan al cambiar la fecha o la clínica, para bloquear la hora.
-  useEffect(() => {
-    async function cargarHoras() {
-      if (tramite?.estado !== 'CLINICA_SELECCIONADA' || !tramite.clinica || !fechaISO) {
-        setHorasOcupadas([]);
-        return;
-      }
-      setCargandoHoras(true);
-      try {
-        setHorasOcupadas(await getHorasOcupadas(tramite.clinica.id, fechaISO));
-      } catch {
-        setHorasOcupadas([]);
-      } finally {
-        setCargandoHoras(false);
-      }
-    }
-    void cargarHoras();
-  }, [tramite?.estado, tramite?.clinica?.id, fechaISO]);
 
   function fijarFechaISO(iso: string) {
     setFechaISO(iso);
@@ -121,15 +112,27 @@ export default function WebPage() {
   async function handleCotizar(e: React.FormEvent) {
     e.preventDefault();
     if (!estudioId) return;
-    // Teléfono y nombre efectivos: de la sesión si la hay, del formulario si no.
-    // Con sesión el paciente puede no tener teléfono: entonces se cotiza
-    // por su pacienteId (crearTramite lo acepta) y sus folios se listan por id.
-    const telefonoEfectivo = sesionPaciente?.telefono ?? telefono;
+    // Sin sesión la CURP es obligatoria y debe ser válida.
+    if (!sesionPaciente) {
+      const v = validarCurp(curpEfectiva);
+      if (!v.valida) {
+        setMensaje(`La CURP no es válida: ${v.motivo}`);
+        return;
+      }
+    }
+    // Nombre y CURP efectivos: de la sesión si la hay, del formulario si no.
     const nombreEfectivo = sesionPaciente?.nombre ?? nombre;
     const fechaSesion = sesionPaciente?.fechaNacimiento || undefined;
-    const listarFoliosActuales = () =>
-      sesionPaciente ? getTramitesPorPacienteId(sesionPaciente.id) : getTramitesPorTelefono(telefonoEfectivo);
-    const recargarFolios = () => cargarFolios(telefonoEfectivo, sesionPaciente?.id);
+    const listarFoliosActuales = async () => {
+      if (sesionPaciente) return getTramitesPorPacienteId(sesionPaciente.id);
+      try {
+        const p = await buscarPacientePorCurp(curpEfectiva);
+        return await getTramitesPorPacienteId(p.id);
+      } catch {
+        return [];
+      }
+    };
+    const recargarFolios = () => cargarFolios(sesionPaciente?.id, curpEfectiva);
     setCargando(true);
     setMensaje('');
     // Folios que ya existían antes de este intento, para detectar en
@@ -146,6 +149,7 @@ export default function WebPage() {
       const creado = await crearTramite({
         nombre: nombreEfectivo,
         telefono: telefonoEfectivo,
+        curp: sesionPaciente ? undefined : curpEfectiva,
         pacienteId: sesionPaciente?.id,
         ...(fechaSesion ? { fechaNacimiento: fechaSesion } : {}),
         estudioId,
@@ -203,7 +207,7 @@ export default function WebPage() {
       const actualizado = await seleccionarClinica(tramite.id, clinicaId);
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
-      await cargarFolios(sesionPaciente?.telefono ?? telefono, sesionPaciente?.id);
+      await cargarFolios(sesionPaciente?.id, curpEfectiva);
     } catch {
       setMensaje('No se pudo seleccionar la clínica: el backend no respondió y no se guardó nada. Revisa que el backend esté arriba.');
     } finally {
@@ -217,10 +221,6 @@ export default function WebPage() {
       setMensaje('La fecha no es válida. Escríbela como DD/MM/AAAA, por ejemplo 25/11/2026.');
       return;
     }
-    if (horasOcupadas.includes(hora)) {
-      setMensaje(`La hora ${hora} ya está ocupada en esa clínica ese día. Elige otra hora.`);
-      return;
-    }
     setCargando(true);
     try {
       const fechaHoraISO = `${fechaISO}T${hora}:00`;
@@ -229,7 +229,7 @@ export default function WebPage() {
       setMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,
       );
-      await cargarFolios(sesionPaciente?.telefono ?? telefono, sesionPaciente?.id);
+      await cargarFolios(sesionPaciente?.id, curpEfectiva);
     } catch (err) {
       // 409 (hueco ocupado) o 400 (fecha/hora pasada): el mensaje del
       // backend se muestra tal cual, sin inventar otro.
@@ -266,7 +266,7 @@ export default function WebPage() {
             </p>
           ) : (
             <p className="muted" style={{ marginBottom: 12 }}>
-              Sin sesión, cotiza solo con tu nombre y tu teléfono. Si{' '}
+              Sin sesión, cotiza con tu nombre y tu CURP (el teléfono es opcional). Si{' '}
               <Link to="/login">inicias sesión</Link>, tus datos se toman de tu cuenta.
             </p>
           )}
@@ -278,8 +278,19 @@ export default function WebPage() {
                   <input value={nombre} onChange={(e) => setNombre(e.target.value)} required />
                 </label>
                 <label>
-                  Teléfono (WhatsApp)
-                  <input value={telefono} onChange={(e) => setTelefono(e.target.value)} required />
+                  CURP (obligatoria, 18 caracteres)
+                  <input
+                    value={curp}
+                    onChange={(e) => setCurp(normalizarCurp(e.target.value))}
+                    placeholder="Ej. GALA900514MDFRPN00"
+                    maxLength={18}
+                    style={{ textTransform: 'uppercase' }}
+                    required
+                  />
+                </label>
+                <label>
+                  Teléfono (WhatsApp) — opcional
+                  <input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="2220000001 (opcional)" />
                 </label>
               </>
             )}
@@ -351,31 +362,21 @@ export default function WebPage() {
                         inputMode="numeric"
                       />
                     </label>
-                    <label>
-                      Hora
-                      <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} />
-                    </label>
                   </div>
-                  {fechaISO && tramite.clinica && (
-                    <p className="muted">
-                      {cargandoHoras
-                        ? 'Consultando horas ocupadas…'
-                        : horasOcupadas.length > 0
-                          ? `Horas ocupadas: ${horasOcupadas.join(', ')}`
-                          : 'Horas ocupadas: ninguna, el día está libre.'}
-                    </p>
-                  )}
-                  {hora && horasOcupadas.includes(hora) && (
-                    <p className="notice" role="alert">
-                      La hora {hora} ya está ocupada en esa clínica ese día. Elige otra hora.
-                    </p>
-                  )}
+                  <ParrillaHorarios
+                    clinicaId={tramite.clinica?.id ?? ''}
+                    fechaISO={fechaISO}
+                    estudioId={tramite.estudio.id}
+                    exceptoTramiteId={tramite.id}
+                    horaSeleccionada={hora}
+                    onSeleccionar={setHora}
+                  />
                   <div className="actions">
                     <button
                       type="button"
                       className="btn btn-primary"
                       onClick={() => void handleConfirmar()}
-                      disabled={!fechaISO || !hora || horasOcupadas.includes(hora) || cargando}
+                      disabled={!fechaISO || !hora || cargando}
                     >
                       Confirmar reservación
                     </button>

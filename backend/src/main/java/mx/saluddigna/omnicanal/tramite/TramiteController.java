@@ -3,6 +3,7 @@ package mx.saluddigna.omnicanal.tramite;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -32,7 +33,15 @@ public class TramiteController {
         this.eventos = eventos;
     }
 
-    public record CrearTramiteRequest(@NotNull UUID pacienteId, Long estudioId, String canalOrigen) {
+    /**
+     * Crear un trámite. `pacienteId` (UUID, flujo habitual) o `curp`
+     * (flujo invitado de la Web: resuelve o crea al paciente por CURP;
+     * si la CURP no existe, `nombre` es obligatorio y la fecha de
+     * nacimiento se deriva de la CURP). Al menos uno de los dos es
+     * obligatorio (400 si no viene ninguno).
+     */
+    public record CrearTramiteRequest(UUID pacienteId, String curp, String nombre, String telefono,
+                                      Long estudioId, String canalOrigen) {
     }
 
     public record CotizarRequest(@NotNull Long estudioId) {
@@ -52,8 +61,17 @@ public class TramiteController {
 
     @PostMapping("/tramites")
     public ResponseEntity<Tramite> crear(@Valid @RequestBody CrearTramiteRequest req) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(service.crearTramite(req.pacienteId(), req.estudioId(), req.canalOrigen()));
+        if (req.pacienteId() != null) {
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(service.crearTramite(req.pacienteId(), req.estudioId(), req.canalOrigen()));
+        }
+        if (req.curp() != null && !req.curp().isBlank()) {
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(service.crearTramitePorCurp(req.curp(), req.nombre(), req.telefono(),
+                            req.estudioId(), req.canalOrigen()));
+        }
+        throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "pacienteId o curp es obligatorio para crear el trámite");
     }
 
     @GetMapping("/tramites/{id}")
@@ -73,6 +91,11 @@ public class TramiteController {
      * Disponibilidad sin empalmes: ¿el hueco (clínica, fecha, hora) ya está
      * ocupado por otra cita CONFIRMADA? GET /api/disponibilidad?clinicaId=1&fechaHora=2026-11-25T10:00
      * (fechaHora en ISO). `exceptoTramiteId` excluye la cita propia al reconfirmar.
+     * CAMBIO 2026-11-24: ya no es igualdad exacta de fechaHora, sino
+     * solape de intervalos: la hora pedida se toma como una cita nueva
+     * de 30 min y está ocupada si se cruza con una cita CONFIRMADA
+     * (que ocupa [fechaHora, fechaHora + duracionMin de su estudio)).
+     * El contrato ({"clinicaId","fechaHora","ocupado"}) no cambia.
      */
     @GetMapping("/disponibilidad")
     public Map<String, Object> disponibilidad(
@@ -84,8 +107,57 @@ public class TramiteController {
     }
 
     /**
+     * Parrilla de horarios del día: 20 slots de 30 min (07:00, 07:30, …,
+     * 16:30; el último termina 17:00) con su estado, por solape con las
+     * citas CONFIRMADAS de esa clínica (cada cita ocupa [fechaHora,
+     * fechaHora + duracionMin de su estudio)).
+     * GET /api/disponibilidad/parrilla?clinicaId=1&fecha=2026-11-25[&estudioId=1][&exceptoTramiteId=...]
+     * `estudioId` fija la duración de la cita nueva (para el solape
+     * futuro); si no viene, duracionMin 30. `exceptoTramiteId` excluye
+     * la cita propia al reconfirmar.
+     * Respuesta: {"clinicaId":1,"fecha":"2026-11-25","estudioId":1,"duracionMin":30,
+     * "slots":[{"hora":"07:00","ocupado":false}, …20 slots]}.
+     */
+    @GetMapping("/disponibilidad/parrilla")
+    public Map<String, Object> parrilla(
+            @RequestParam Long clinicaId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate fecha,
+            @RequestParam(required = false) Long estudioId,
+            @RequestParam(required = false) UUID exceptoTramiteId) {
+        if (!service.existeClinica(clinicaId)) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Clinica no encontrada: " + clinicaId);
+        }
+        int duracionMin = service.duracionEstudio(estudioId);
+        if (estudioId != null && !service.existeEstudio(estudioId)) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Estudio no encontrado: " + estudioId);
+        }
+        List<Map<String, Object>> slots = service.parrilla(clinicaId, fecha, estudioId, exceptoTramiteId).stream()
+                .map(s -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("hora", s.hora());
+                    m.put("ocupado", s.ocupado());
+                    return m;
+                })
+                .toList();
+        Map<String, Object> respuesta = new LinkedHashMap<>();
+        respuesta.put("clinicaId", clinicaId);
+        respuesta.put("fecha", fecha.toString());
+        respuesta.put("estudioId", estudioId);
+        respuesta.put("duracionMin", duracionMin);
+        respuesta.put("slots", slots);
+        return respuesta;
+    }
+
+    /**
      * Horas ocupadas ("HH:mm") de una clínica en un día.
      * GET /api/disponibilidad/dia?clinicaId=1&fecha=2026-11-25 (fecha en ISO AAAA-MM-DD).
+     * CAMBIO 2026-11-24: ya no son las horas exactas de inicio de las
+     * citas, sino los inicios de slot de la parrilla (07:00–16:30, cada
+     * 30 min) que se solapan con alguna cita CONFIRMADA (una cita de
+     * 10:15 de 20 min ocupa 10:00 y 10:30). El contrato (lista de
+     * "HH:mm" ordenada) no cambia; el front usa la parrilla.
      */
     @GetMapping("/disponibilidad/dia")
     public Map<String, Object> horasOcupadas(

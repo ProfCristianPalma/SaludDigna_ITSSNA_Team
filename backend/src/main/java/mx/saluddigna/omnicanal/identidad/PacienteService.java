@@ -2,6 +2,7 @@ package mx.saluddigna.omnicanal.identidad;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,6 +12,7 @@ import java.util.UUID;
 import mx.saluddigna.omnicanal.eventos.EventoService;
 import mx.saluddigna.omnicanal.eventos.domain.TipoEvento;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
+import mx.saluddigna.omnicanal.seguridad.PasswordService;
 import mx.saluddigna.omnicanal.tramite.TramiteRepository;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
 import org.springframework.http.HttpStatus;
@@ -26,13 +28,16 @@ public class PacienteService {
     private final EventoService eventos;
     private final TramiteRepository tramites;
     private final ObjectMapper objectMapper;
+    private final PasswordService passwords;
 
     public PacienteService(PacienteRepository repository, EventoService eventos,
-                           TramiteRepository tramites, ObjectMapper objectMapper) {
+                           TramiteRepository tramites, ObjectMapper objectMapper,
+                           PasswordService passwords) {
         this.repository = repository;
         this.eventos = eventos;
         this.tramites = tramites;
         this.objectMapper = objectMapper;
+        this.passwords = passwords;
     }
 
     /**
@@ -237,6 +242,48 @@ public class PacienteService {
     public Paciente actualizar(UUID id, String nombre, String telefono, String email,
                                LocalDate fechaNacimiento, UUID tramiteId) {
         return actualizar(id, nombre, telefono, email, fechaNacimiento, tramiteId, null);
+    }
+
+    /**
+     * Restablece la contraseña de un paciente. Las contraseñas son
+     * PBKDF2 y NO se pueden recuperar ni mostrar: aquí solo se pone
+     * una nueva (nunca se devuelve el hash ni la contraseña actual).
+     * Si `password` viene vacía o no viene, se genera una aleatoria
+     * legible de 12 caracteres (letras+números, sin caracteres
+     * ambiguos: sin 0/O, 1/I/l); si viene, mínimo 6 caracteres (400 si
+     * no). La nueva contraseña se guarda con hash PBKDF2 y se devuelve
+     * UNA VEZ (el controlador la pone en la respuesta; el log de
+     * eventos solo registra que se restableció, jamás la contraseña).
+     * El cambio queda en el log del trámite más reciente del paciente,
+     * si tiene alguno; si no tiene trámite, solo se guarda el cambio.
+     */
+    public String restablecerPassword(UUID id, String password) {
+        Paciente paciente = buscarPorId(id);
+        String nueva = (password == null || password.isBlank())
+                ? generarPasswordLegible(12) : password;
+        if (nueva.length() < 6) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La contraseña debe tener al menos 6 caracteres");
+        }
+        paciente.setPasswordHash(passwords.hash(nueva));
+        repository.save(paciente);
+        tramites.findByPacienteIdOrderByCreatedAtDesc(id).stream()
+                .findFirst()
+                .ifPresent(t -> eventos.registrar(t.getId(), TipoEvento.PASSWORD_RESTABLECIDA,
+                        "CALL_CENTER", "ASESOR",
+                        json(Map.of("pacienteId", id.toString()))));
+        return nueva;
+    }
+
+    /** Contraseña aleatoria legible: sin 0/O, 1/I/l (no se confunden al dictarla). */
+    private static String generarPasswordLegible(int longitud) {
+        final String alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        SecureRandom azar = new SecureRandom();
+        StringBuilder sb = new StringBuilder(longitud);
+        for (int i = 0; i < longitud; i++) {
+            sb.append(alfabeto.charAt(azar.nextInt(alfabeto.length())));
+        }
+        return sb.toString();
     }
 
     private String json(Map<String, String> mapa) {

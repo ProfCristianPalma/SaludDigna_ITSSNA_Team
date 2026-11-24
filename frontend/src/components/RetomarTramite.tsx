@@ -68,10 +68,9 @@ export default function RetomarTramite() {
     }
   }
 
-  function continuarEnWhatsapp(t: Tramite) {
-    // El identificador de WhatsApp puede ser la CURP: el bot la resuelve.
-    window.sessionStorage.setItem('saluddigna-wa-telefono', normalizarCurp(curp));
-    window.sessionStorage.setItem('saluddigna-wa-folio', t.folio);
+  function continuarEnWhatsapp(_t: Tramite) {
+    // WhatsApp ya no toma en cuenta la sesión: el bot pide la CURP al
+    // entrar, así que este botón solo navega a /whatsapp.
     navigate('/whatsapp');
   }
 

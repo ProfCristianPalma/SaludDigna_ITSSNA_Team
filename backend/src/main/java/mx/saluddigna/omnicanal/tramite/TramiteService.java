@@ -3,8 +3,13 @@ package mx.saluddigna.omnicanal.tramite;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,7 +24,9 @@ import mx.saluddigna.omnicanal.catalogo.domain.Clinica;
 import mx.saluddigna.omnicanal.catalogo.domain.Estudio;
 import mx.saluddigna.omnicanal.eventos.EventoService;
 import mx.saluddigna.omnicanal.eventos.domain.TipoEvento;
+import mx.saluddigna.omnicanal.identidad.CurpUtil;
 import mx.saluddigna.omnicanal.identidad.PacienteRepository;
+import mx.saluddigna.omnicanal.identidad.TelefonoUtil;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
 import mx.saluddigna.omnicanal.tramite.domain.EstadoTramite;
 import mx.saluddigna.omnicanal.tramite.domain.Tramite;
@@ -71,6 +78,41 @@ public class TramiteService {
         return tramite;
     }
 
+    /**
+     * Crea un trámite resolviendo/creando al paciente por CURP (flujo
+     * invitado de la Web: POST /api/tramites con `curp` y sin
+     * `pacienteId`). Si la CURP ya existe, se usa ese paciente (se
+     * ignoran nombre/teléfono del request); si no existe, se crea el
+     * paciente con el nombre dado y la fecha de nacimiento que codifica
+     * la CURP (el teléfono es opcional). La CURP se valida (400 si no
+     * es válida) y el nombre es obligatorio solo cuando hay que crear
+     * al paciente.
+     */
+    public Tramite crearTramitePorCurp(String curp, String nombre, String telefono,
+                                       Long estudioId, String canalOrigen) {
+        String curpNormalizada = CurpUtil.normalizar(curp);
+        CurpUtil.validar(curpNormalizada).ifPresent(motivo -> {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, motivo);
+        });
+        Paciente paciente = pacientes.findByCurp(curpNormalizada).orElseGet(() -> {
+            if (nombre == null || nombre.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "El nombre es obligatorio para crear al paciente por CURP");
+            }
+            String tel = null;
+            if (telefono != null && !telefono.isBlank()) {
+                tel = TelefonoUtil.normalizar(telefono);
+                if (tel != null && tel.isBlank()) {
+                    tel = null;
+                }
+            }
+            Paciente nuevo = new Paciente(nombre.trim(), tel, null, CurpUtil.fechaDesdeCurp(curpNormalizada));
+            nuevo.setCurp(curpNormalizada);
+            return pacientes.save(nuevo);
+        });
+        return crearTramite(paciente.getId(), estudioId, canalOrigen);
+    }
+
     public Tramite cotizar(UUID tramiteId, Long estudioId) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.INICIADO, EstadoTramite.DATOS_PENDIENTES);
@@ -117,6 +159,115 @@ public class TramiteService {
         return tramite;
     }
 
+    /**
+     * Parrilla de horarios: slots de 30 min de 07:00 a 17:00 (el último
+     * slot es 16:30–17:00). Una cita CONFIRMADA ocupa el intervalo
+     * [fechaHora, fechaHora + duracionMin del estudio de su trámite);
+     * un slot está ocupado si se solapa con alguna cita CONFIRMADA de
+     * esa clínica ese día. Duraciones reales del catálogo:
+     * Ultrasonido 30, Perfil tiroideo 15, Radiografía 20, Análisis 10.
+     */
+    public static final LocalTime APERTURA = LocalTime.of(7, 0);
+    public static final LocalTime CIERRE = LocalTime.of(17, 0);
+    public static final int DURACION_SLOT_MIN = 30;
+    public static final int DURACION_DEFAULT_MIN = 30;
+
+    /** Un slot de la parrilla: hora de inicio ("HH:mm") y si está ocupado. */
+    public record ParrillaSlot(String hora, boolean ocupado) {
+    }
+
+    private static final DateTimeFormatter FORMATO_HORA = DateTimeFormatter.ofPattern("HH:mm");
+    private static final DateTimeFormatter FORMATO_FECHA_LATINA = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /** Duración en minutos de un estudio (30 si no existe o no tiene duración). */
+    @Transactional(readOnly = true)
+    public int duracionEstudio(Long estudioId) {
+        if (estudioId == null) {
+            return DURACION_DEFAULT_MIN;
+        }
+        return estudios.findById(estudioId)
+                .map(Estudio::getDuracionMin)
+                .filter(d -> d != null && d > 0)
+                .orElse(DURACION_DEFAULT_MIN);
+    }
+
+    /** ¿Existe la clínica? (para validar la parrilla antes de calcularla). */
+    @Transactional(readOnly = true)
+    public boolean existeClinica(Long clinicaId) {
+        return clinicaId != null && clinicas.existsById(clinicaId);
+    }
+
+    /** ¿Existe el estudio? (para validar la parrilla antes de calcularla). */
+    @Transactional(readOnly = true)
+    public boolean existeEstudio(Long estudioId) {
+        return estudioId != null && estudios.existsById(estudioId);
+    }
+
+    /** Duración de una cita ya guardada: la del estudio de su trámite (30 si no se sabe). */
+    private int duracionDeCita(Cita cita) {
+        Long estudioId = cita.getTramite() == null ? null : cita.getTramite().getEstudioId();
+        return duracionEstudio(estudioId);
+    }
+
+    /** ¿Se cruzan [aInicio, aInicio+aMin) y [bInicio, bInicio+bMin)? */
+    private static boolean solapan(LocalDateTime aInicio, int aMin, LocalDateTime bInicio, int bMin) {
+        return aInicio.isBefore(bInicio.plusMinutes(bMin)) && bInicio.isBefore(aInicio.plusMinutes(aMin));
+    }
+
+    /** Citas CONFIRMADAS de una clínica en un día (excluye la del trámite dado, si se pasa). */
+    @Transactional(readOnly = true)
+    public List<Cita> citasConfirmadasDelDia(Long clinicaId, LocalDate fecha, UUID exceptoTramiteId) {
+        LocalDateTime desde = fecha.atStartOfDay();
+        LocalDateTime hasta = fecha.plusDays(1).atStartOfDay();
+        return citas.findByClinicaIdAndFechaHoraBetween(clinicaId, desde, hasta).stream()
+                .filter(c -> "CONFIRMADA".equals(c.getEstado()))
+                .filter(c -> exceptoTramiteId == null
+                        || c.getTramite() == null || !c.getTramite().getId().equals(exceptoTramiteId))
+                .toList();
+    }
+
+    /**
+     * Parrilla del día: los 20 slots (07:00, 07:30, …, 16:30) con su
+     * estado. `estudioId` solo fija la duración de la cita nueva para
+     * el solape futuro (la parrilla en sí marca ocupado por las citas
+     * que ya existen); si no viene, 30 min.
+     */
+    @Transactional(readOnly = true)
+    public List<ParrillaSlot> parrilla(Long clinicaId, LocalDate fecha, Long estudioId, UUID exceptoTramiteId) {
+        List<Cita> confirmadas = citasConfirmadasDelDia(clinicaId, fecha, exceptoTramiteId);
+        List<ParrillaSlot> slots = new ArrayList<>();
+        for (LocalTime hora = APERTURA; hora.isBefore(CIERRE); hora = hora.plusMinutes(DURACION_SLOT_MIN)) {
+            LocalDateTime inicioSlot = fecha.atTime(hora);
+            boolean ocupado = confirmadas.stream().anyMatch(c ->
+                    solapan(inicioSlot, DURACION_SLOT_MIN, c.getFechaHora(), duracionDeCita(c)));
+            slots.add(new ParrillaSlot(hora.format(FORMATO_HORA), ocupado));
+        }
+        return slots;
+    }
+
+    /** Horas libres ("HH:mm") de la parrilla de un día, en orden. */
+    @Transactional(readOnly = true)
+    public List<String> horasLibresDelDia(Long clinicaId, LocalDate fecha, Long estudioId, UUID exceptoTramiteId) {
+        return parrilla(clinicaId, fecha, estudioId, exceptoTramiteId).stream()
+                .filter(s -> !s.ocupado())
+                .map(ParrillaSlot::hora)
+                .toList();
+    }
+
+    /** Horas libres más cercanas a una hora pedida (máx. 3, en orden cronológico). */
+    @Transactional(readOnly = true)
+    public List<String> horasLibresCercanas(Long clinicaId, LocalDate fecha, LocalTime pedida,
+                                            Long estudioId, UUID exceptoTramiteId) {
+        List<String> libres = horasLibresDelDia(clinicaId, fecha, estudioId, exceptoTramiteId);
+        return libres.stream()
+                .sorted(Comparator.comparingLong((String h) ->
+                                Math.abs(java.time.Duration.between(pedida, LocalTime.parse(h, FORMATO_HORA)).toMinutes()))
+                        .thenComparing(h -> LocalTime.parse(h, FORMATO_HORA)))
+                .limit(3)
+                .sorted(Comparator.comparing(h -> LocalTime.parse(h, FORMATO_HORA)))
+                .toList();
+    }
+
     public Tramite confirmar(UUID tramiteId, LocalDateTime fechaCita) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.CLINICA_SELECCIONADA);
@@ -128,24 +279,34 @@ public class TramiteService {
                     "La fecha y hora de la cita ya pasaron: "
                             + fechaCita.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")));
         }
+        // (a) Parrilla: 07:00–16:30, minutos múltiplo de 30.
+        LocalTime hora = fechaCita.toLocalTime();
+        if (hora.isBefore(APERTURA) || hora.isAfter(LocalTime.of(16, 30))
+                || hora.getMinute() % DURACION_SLOT_MIN != 0 || hora.getSecond() != 0 || hora.getNano() != 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La hora debe estar dentro de la parrilla 07:00–16:30, en múltiplos de 30 minutos "
+                            + "(07:00, 07:30, …, 16:30). Hora pedida: " + hora.format(FORMATO_HORA) + ".");
+        }
         if (tramite.getClinicaId() == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "El tramite no tiene clinica seleccionada");
         }
         Clinica clinica = clinicas.findById(tramite.getClinicaId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Clinica no encontrada"));
-        // Disponibilidad sin empalmes: el hueco es (clinica, fecha, hora).
-        // Si otra cita CONFIRMADA ya ocupa ese hueco, se rechaza con 409
-        // y el mensaje dice cual es el hueco ocupado. La propia cita del
+        // (c) Sin solapamiento: la cita nueva ocupa [fechaCita,
+        // fechaCita + duracionMin del estudio) y no puede cruzarse con
+        // otra cita CONFIRMADA de esa clínica. La propia cita del
         // tramite (si se reconfirma tras cambiar de clinica) no cuenta.
-        citas.findByClinicaIdAndFechaHoraAndEstado(tramite.getClinicaId(), fechaCita, "CONFIRMADA")
-                .filter(otra -> !otra.getTramite().getId().equals(tramiteId))
-                .ifPresent(otra -> {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT,
-                            "Ese horario ya esta ocupado en " + clinica.getNombre() + " el "
-                                    + fechaCita.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-                                    + " a las " + fechaCita.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-                                    + ". Elige otra fecha u hora.");
-                });
+        int duracionNueva = duracionEstudio(tramite.getEstudioId());
+        if (huecoOcupado(tramite.getClinicaId(), fechaCita, duracionNueva, tramiteId)) {
+            List<String> cercanas = horasLibresCercanas(tramite.getClinicaId(), fechaCita.toLocalDate(),
+                    fechaCita.toLocalTime(), tramite.getEstudioId(), tramiteId);
+            String detalle = cercanas.isEmpty()
+                    ? "No quedan horas libres ese día en " + clinica.getNombre() + "."
+                    : "Horas libres cercanas: " + String.join(", ", cercanas) + ".";
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "La hora " + fechaCita.format(FORMATO_HORA) + " está ocupada en " + clinica.getNombre()
+                            + " el " + fechaCita.format(FORMATO_FECHA_LATINA) + ". " + detalle);
+        }
         tramite.setFechaCita(fechaCita);
         tramite.setEstado(EstadoTramite.CONFIRMADO);
         tramite = tramites.save(tramite);
@@ -170,25 +331,37 @@ public class TramiteService {
     /**
      * ¿El hueco (clinica, fecha, hora) esta ocupado por otra cita
      * CONFIRMADA? `exceptoTramiteId` (opcional) excluye la cita propia
-     * del tramite que esta reconfirmando.
+     * del tramite que esta reconfirmando. Ahora es por solape de
+     * intervalos (no igualdad exacta): la cita nueva se toma de 30 min
+     * y una cita existente ocupa [fechaHora, fechaHora + duracionMin
+     * de su estudio). Ver la sobrecarga con duracionMinNueva para la
+     * duración real del estudio.
      */
     @Transactional(readOnly = true)
     public boolean huecoOcupado(Long clinicaId, LocalDateTime fechaHora, UUID exceptoTramiteId) {
-        return citas.findByClinicaIdAndFechaHoraAndEstado(clinicaId, fechaHora, "CONFIRMADA")
-                .filter(c -> exceptoTramiteId == null || !c.getTramite().getId().equals(exceptoTramiteId))
-                .isPresent();
+        return huecoOcupado(clinicaId, fechaHora, DURACION_DEFAULT_MIN, exceptoTramiteId);
     }
 
-    /** Horas ocupadas ("HH:mm") de una clinica en un dia, por citas CONFIRMADAS. */
+    /** Como huecoOcupado, con la duración real (min) de la cita nueva. */
+    @Transactional(readOnly = true)
+    public boolean huecoOcupado(Long clinicaId, LocalDateTime fechaHora, int duracionMinNueva, UUID exceptoTramiteId) {
+        return citasConfirmadasDelDia(clinicaId, fechaHora.toLocalDate(), exceptoTramiteId).stream()
+                .anyMatch(c -> solapan(fechaHora, duracionMinNueva, c.getFechaHora(), duracionDeCita(c)));
+    }
+
+    /**
+     * Horas ocupadas ("HH:mm") de una clinica en un dia, por citas CONFIRMADAS.
+     * CAMBIO 2026-11-24: ya no son las horas exactas de inicio de las
+     * citas, sino los inicios de slot de la parrilla (07:00–16:30, cada
+     * 30 min) que se solapan con alguna cita: una cita de 10:15 de
+     * 20 min ocupa los slots 10:00 y 10:30. El contrato (lista de
+     * "HH:mm" ordenada) no cambia.
+     */
     @Transactional(readOnly = true)
     public List<String> horasOcupadasDelDia(Long clinicaId, java.time.LocalDate fecha) {
-        java.time.LocalDateTime desde = fecha.atStartOfDay();
-        java.time.LocalDateTime hasta = fecha.plusDays(1).atStartOfDay();
-        return citas.findByClinicaIdAndFechaHoraBetween(clinicaId, desde, hasta).stream()
-                .filter(c -> "CONFIRMADA".equals(c.getEstado()))
-                .map(c -> c.getFechaHora().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")))
-                .distinct()
-                .sorted()
+        return parrilla(clinicaId, fecha, null, null).stream()
+                .filter(ParrillaSlot::ocupado)
+                .map(ParrillaSlot::hora)
                 .toList();
     }
 

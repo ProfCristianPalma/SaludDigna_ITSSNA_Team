@@ -58,25 +58,23 @@ cd frontend && npm install && npm run dev
 
 ## Credenciales de prueba
 
-| Paciente | CURP (usuario) | Teléfono (usuario) | Contraseña | Nac. |
-|---|---|---|---|---|
-| Ana García López | `GALA900514MDFRPN00` | `2220000001` | `ana123` | 1990-05-14 |
-| Luis Hernández Torres | `HETL850322HDFRRS01` | `2221112233` | `luis123` | 1985-03-22 |
-| María Fernanda Ruiz | `RUXF920809MDFZXR02` | `2224445566` | `maria123` | 1992-08-09 |
-| Carlos Mendoza Vega | `MEVC781130HDFNGR03` | `2387778899` | `carlos123` | 1978-11-30 |
-| Fernanda López Díaz | `LODF010617MDFPZR04` | `2229990011` | `fernanda123` | 2001-06-17 |
+| Paciente | CURP (usuario) | Contraseña | Nac. |
+|---|---|---|---|
+| Ana García López | `GALA900514MDFRPN00` | `ana123` | 1990-05-14 |
+| Luis Hernández Torres | `HETL850322HDFRRS01` | `luis123` | 1985-03-22 |
+| María Fernanda Ruiz | `RUXF920809MDFZXR02` | `maria123` | 1992-08-09 |
+| Carlos Mendoza Vega | `MEVC781130HDFNGR03` | `carlos123` | 1978-11-30 |
+| Fernanda López Díaz | `LODF010617MDFPZR04` | `fernanda123` | 2001-06-17 |
 
 Las CURPs son **de demostración** (formato válido, derivadas del nombre,
 la fecha de nacimiento, el sexo y la entidad DF; no son CURPs reales de
-ninguna persona). El login vale con la CURP **o** con el teléfono.
+ninguna persona). El login vale solo con la CURP.
 
 | Rol staff | Usuario | Contraseña | Uso |
 |---|---|---|---|
 | Asesor (Call Center) | `asesor` | `asesor123` | Consola `/asesor` |
 | Administrador | `admin` | `admin123` | Clínica, Asesor y `/admin/usuarios` |
 
-También vale el primer nombre como usuario de paciente (`ana` + `ana123`).
-El login acepta CURP, teléfono a 10 dígitos o primer nombre.
 En la demo también vale el header `X-Rol: Paciente | Asesor | Administrador`
 (simplificación documentada).
 
@@ -88,13 +86,13 @@ La app arranca en `/` (Bienvenida). Desde ahí se va a todo lo demás:
 | Ruta | Ventana | Qué es |
 |---|---|---|
 | `/` | Bienvenida | Solo presentación de Salud Digna y acciones de sesión (sin tarjetas de canales ni botón de cotizar; para cotizar está el enlace "Cotizar" del menú). Sin sesión: botones a login y registro. Con sesión: "Continuar como {nombre}", "Ver mi historial" y "Cerrar sesión" |
-| `/cotizar` (alias `/web`) | Web | Cotizar un estudio y crear un folio nuevo. Sin fecha de nacimiento: con sesión los datos vienen de la sesión (no editables); sin sesión solo se piden nombre y teléfono |
+| `/cotizar` (alias `/web`) | Web | Cotizar un estudio y crear un folio nuevo. Sin fecha de nacimiento: con sesión los datos vienen de la sesión (no editables); sin sesión se piden nombre y CURP (obligatoria), el teléfono es opcional |
 | `/login` | Iniciar sesión | Ventana separada; tras entrar, va a `/app` (paciente) o a `/asesor` (asesor/admin) |
 | `/registro` | Crear cuenta | Ventana separada; tras crearla, entra directo a `/app` |
 | `/app` | App | Tus citas (exige sesión, muestra tu nombre y solo tus folios) |
 | `/historial` | Mi historial | TODOS tus folios, del más reciente al más viejo |
-| `/whatsapp` | WhatsApp | Continuar un trámite con el bot (con tu sesión, arranca con tus datos) |
-| `/asesor` | Call Center | Consola del asesor (busca por teléfono, folio o nombre) — **solo personal** |
+| `/whatsapp` | WhatsApp | Continuar un trámite con el bot: no usa la sesión, siempre pide la CURP del paciente antes de tocar ningún dato (una tercera persona puede continuar el trámite con la CURP) |
+| `/asesor` | Call Center | Consola del asesor (busca por CURP, teléfono, folio o nombre) — **solo personal** |
 | `/clinica` | Clínica | Recepción: citas confirmadas de TODOS los pacientes — **solo personal** |
 | `/journey` | Journey | Tu recorrido paso a paso, en tiempo real |
 | `/admin/usuarios` | Administración de usuarios | **Solo por URL** (sin botón ni enlace) y **solo personal**: listado de usuarios con CRUD real contra Postgres |
@@ -156,16 +154,14 @@ fecha real en los 6 dígitos AAMMDD y código de entidad válido). El
 CURP, y la BD ya no impone teléfono único ni NOT NULL (la unicidad del
 teléfono, cuando hay, la sigue imponiendo el servicio).
 
-- **Login:** `POST /api/auth/login` acepta CURP, teléfono o primer nombre.
+- **Login:** `POST /api/auth/login` acepta **solo la CURP** para pacientes (cualquier otro identificador → 401 genérico). El staff entra con usuario + contraseña, sin cambios.
 - **Registro:** `POST /api/auth/registro` exige CURP; teléfono opcional.
 - **Búsqueda:** `GET /api/pacientes?curp=` y `GET /api/pacientes/{id}/tramites`
   (trámites del paciente como mapas planos, igual que el journey).
 - **Editar:** `PUT /api/pacientes/{id}` acepta `curp` (valida formato y
   unicidad; vacía no la borra) y `telefono: ""` **borra** el teléfono;
   `telefono` ausente no lo toca.
-- **WhatsApp:** `POST /api/canales/whatsapp/mensaje` acepta CURP o
-  teléfono en el campo `telefono`; un identificador no registrado se
-  registra en el chat con nombre + CURP + fecha DD/MM/AAAA + contraseña.
+- **WhatsApp:** `POST /api/canales/whatsapp/mensaje` con `{curp?, mensaje, folio?}` (el campo `telefono` se eliminó). Sin CURP el bot la pide antes de tocar ningún dato del paciente; un identificador no registrado se registra en el chat con nombre + CURP + fecha DD/MM/AAAA + contraseña. El bot puede completar la reservación entera (estudio → clínica → fecha y hora): si la hora está ocupada lo dice y ofrece las horas libres cercanas.
 - Las CURPs semilla son de demostración (ver tabla de credenciales).
 
 ## Fechas en formato latinoamericano DD/MM/AAAA
@@ -199,11 +195,10 @@ paciente logueado, y solo se ven **sus** folios.
   bloquearla. Al registrarse hace auto-login y devuelve
   `{token, paciente, rol:"PACIENTE"}`.
 - **Login:** `POST /api/auth/login` con `{usuario, password}`. El usuario
-  puede ser la **CURP** (`GALA900514MDFRPN00`), el **teléfono a 10 dígitos**
-  (`2220000001`) o el **primer nombre** (`ana`); el staff usa `asesor` /
-  `admin`. Contraseña incorrecta o usuario inexistente → 401. Devuelve
+  es la **CURP** (`GALA900514MDFRPN00`) para pacientes; el staff usa `asesor` /
+  `admin` / `doctor`. Contraseña incorrecta o usuario inexistente → 401. Devuelve
   `{token, usuario, rol, paciente?}`. El `usuario` de la sesión (y el
-  subject del JWT) es el teléfono si el paciente tiene, si no su CURP.
+  subject del JWT) es la CURP del paciente.
 - **Sesión:** `GET /api/auth/yo` con header `Authorization: Bearer <token>`
   devuelve `{paciente, usuario, rol}`. El front guarda el token en
   **`sessionStorage`** (`saluddigna-token`) y lo manda en cada llamada.
@@ -263,11 +258,16 @@ pide sesión de asesor o admin, como Clínica y Asesor (ver
 
 - **Lista:** todos los usuarios de Postgres con su cantidad de folios,
   buscador por nombre o teléfono.
-- **Crear:** nombre, teléfono (se normaliza a 10 dígitos), email, fecha
-  de nacimiento y contraseña (mínimo 6, hash PBKDF2). 409 si el teléfono
-  ya existe.
-- **Editar:** nombre, teléfono, email y fecha; la contraseña solo se
-  cambia si se escribe una nueva. 409 si el teléfono choca con otro usuario.
+- **Crear:** nombre, CURP (obligatoria), teléfono opcional, email, fecha
+  de nacimiento y contraseña (mínimo 6, hash PBKDF2). La contraseña
+  recién creada se muestra **una sola vez** ("Anótala, no se volverá a
+  mostrar"): las guardadas son hash y no se pueden volver a ver.
+- **Editar:** nombre, CURP, teléfono, email y fecha; la contraseña solo se
+  cambia si se escribe una nueva (también se muestra una sola vez).
+- **Restablecer contraseña:** botón por fila (pacientes y staff) con input
+  + ojo + "Generar" (12 caracteres legibles): pacientes por
+  `POST /api/pacientes/{id}/restablecer-password` (la nueva se devuelve
+  solo en esa respuesta), staff por `PUT /api/admin/staff/{id}`.
 - **Borrar:** con confirmación que dice cuántos folios se borrarán.
   Borra en cascada y en la misma transacción al usuario, sus folios
   (trámites), sus citas y sus eventos: `tramites.paciente_id` es una FK
@@ -334,15 +334,16 @@ leen y escriben sobre los mismos trámites.
 - **Cómo se crean:** en la Web, cada Cotizar crea un **folio nuevo** (un
   folio por estudio). Si Ana cotiza Ultrasonido y luego Perfil tiroideo,
   tiene 2 folios distintos. La Web muestra la lista "Mis folios" con todos
-  los de ese teléfono.
-- **Cómo se busca:** por **teléfono** (`GET /api/tramites?telefono=`),
-  por **folio** (`GET /api/tramites/folio/SD-2026-0001`) o por **nombre**
+  los de esa CURP.
+- **Cómo se busca:** por **CURP** (`GET /api/pacientes?curp=` y luego sus
+  trámites), por **folio** (`GET /api/tramites/folio/SD-2026-0001`) o por **nombre**
   (`GET /api/pacientes/buscar?nombre=Ana` y luego sus trámites). El
   Journey acepta folio, teléfono o UUID: con teléfono muestra la lista de
   folios para elegir uno.
-- **WhatsApp es un chatbot con contexto:** el front manda el folio en
-  contexto con cada mensaje (campo `folio`), así que "1" o "25/11/2026"
-  se aplican al trámite que se venía siguiendo. El orden para elegir
+- **WhatsApp es un chatbot con contexto:** el front manda la CURP y el
+  folio en contexto con cada mensaje (campos `curp` y `folio`), así que "1" o "25/11/2026"
+  se aplican al trámite que se venía siguiendo. Sin CURP el bot la pide
+  antes de tocar ningún dato del paciente. El orden para elegir
   trámite es: folio explícito en el texto o en contexto, "folio N" /
   "opción N", la intención por estado (elegir clínica → el COTIZADO;
   una fecha → el CLINICA_SELECCIONADA; un estudio → el INICIADO),
@@ -350,8 +351,10 @@ leen y escriben sobre los mismos trámites.
   los folios y pregunta (nunca elige al azar). El bot entiende por
   estado: en COTIZADO elige clínica con "1", "uno", "primera",
   "Puebla", "Tehuacán" o el nombre de la clínica; en
-  CLINICA_SELECCIONADA confirma con una fecha DD/MM/AAAA, "hoy",
-  "mañana" o "pasado mañana" (fecha pasada o imposible → lo dice y
+  CLINICA_SELECCIONADA confirma con una fecha y hora DD/MM/AAAA HH:MM
+  ("hoy", "mañana" o "pasado mañana" valen; si solo da la fecha, el bot
+  ofrece las horas libres de ese día; si la hora está ocupada lo dice y
+  ofrece las libres cercanas; fecha pasada o imposible → lo dice y
   vuelve a pedir), y "cambiar clínica" vuelve a COTIZADO; en
   INICIADO pide el estudio por nombre o palabra clave; en CONFIRMADO
   dice cuándo y dónde es la cita (cambiar fecha y cancelar no están
@@ -361,7 +364,7 @@ leen y escriben sobre los mismos trámites.
   del folio y las opciones válidas, sin inventar avances. Cada
   respuesta trae `opciones` (botones) y `entendido`. Un "hola" NUNCA
   crea un trámite: solo se crea cuando el usuario pide un estudio
-  concreto. Un identificador no registrado (CURP o teléfono) se registra
+  concreto. Un paciente no registrado se registra
   en el mismo chat con nombre completo + CURP + fecha de nacimiento
   (DD/MM/AAAA) + contraseña (mínimo 6); si la CURP ya existe, se sigue
   con ese paciente.
@@ -369,22 +372,22 @@ leen y escriben sobre los mismos trámites.
   (`GET /api/tramites?estado=CONFIRMADO`). El check-in queda en el log de
   eventos y "Registrar atención" llama a `POST /api/tramites/{id}/atender`
   (CONFIRMADO → ATENDIDO); el atendido desaparece de la lista al recargar.
-- **Asesor:** busca por teléfono, folio o nombre, ve la lista de folios
+- **Asesor:** busca por CURP, teléfono, folio o nombre, ve la lista de folios
   del paciente y elige uno. "Completar dato" guarda en la BD
   (`POST /tramites/{id}/completar-dato`) y "Guardar nota" queda en el log
   (`POST /canales/call-center/nota`); ambas recargan el trámite/timeline.
 - **Modo demo sin backend:** el mock solo se usa cuando el backend **no
-  responde** (error de red). Si el backend responde 404 (folio o teléfono
+  responde** (error de red). Si el backend responde 404 (folio o paciente
   inexistente), la página muestra "no encontrado" en vez de inventar a Ana.
 
 ### Probar 2 folios de un mismo usuario
 
-1. En la Web (`/cotizar`), como Ana (2220000001), cotiza Ultrasonido → folio nuevo.
-2. Con el mismo teléfono, cotiza Perfil tiroideo → **otro folio nuevo**.
+1. En la Web (`/cotizar`), como Ana (CURP `GALA900514MDFRPN00`), cotiza Ultrasonido → folio nuevo.
+2. Con la misma CURP, cotiza Perfil tiroideo → **otro folio nuevo**.
 3. En "Mis folios" deben aparecer los 2, cada uno con su estudio y precio.
-4. En WhatsApp escribe "hola": el bot lista los 2 folios; responde
+4. En WhatsApp escribe "hola": el bot pide la CURP; escríbela y lista los 2 folios; responde
    `SD-2026-0002` (o el folio que toque) y continúa solo con ese.
-5. En el asesor busca `Ana` o su teléfono: ve los 2 folios y elige uno.
+5. En el asesor busca `Ana` o su CURP: ve los 2 folios y elige uno.
 6. En Clínica, tras confirmar una cita, atiende ese folio: solo ese pasa
    a ATENDIDO; el otro sigue en su estado.
 
@@ -392,11 +395,11 @@ leen y escriben sobre los mismos trámites.
 ## Historial de folios vs Clínica (no son lo mismo)
 
 - **Historial (`/historial`)**: TODOS los folios de UN solo paciente, el
-  logueado. Exige sesión, muestra su nombre y teléfono, y cada folio con
+  logueado. Exige sesión, muestra su nombre y su CURP, y cada folio con
   estudio, precio, estado, clínica, fecha de cita y canal de origen,
   del más reciente al más viejo, con enlace a su Journey y, si está
-  COTIZADO, botón "Continuar en WhatsApp" que abre `/whatsapp` con ese
-  folio. Cada tarjeta muestra además "Pasos realizados" y "Pasos
+  COTIZADO, botón "Continuar en WhatsApp" que abre `/whatsapp` (el bot
+  pide la CURP al entrar). Cada tarjeta muestra además "Pasos realizados" y "Pasos
   faltantes" según el estado del folio (INICIADO → COTIZADO → Clínica
   elegida → Cita confirmada → Atención en clínica), más los datos
   pendientes si los tiene. La App (`/app`) muestra lo mismo en formato
@@ -439,27 +442,27 @@ página muestra el error REAL (HTTP + mensaje) en vez del genérico.
 ### Cotizar sin fecha de nacimiento y sin falsos negativos
 
 El formulario de cotizar ya no pide fecha de nacimiento: con sesión
-los datos (nombre, teléfono, fecha) vienen de la sesión y no se
-muestran editables; sin sesión se cotiza solo con nombre y teléfono
-(la fecha es nullable en la BD y el paciente se resuelve por teléfono).
-Las escrituras del flujo de cotizar usan timeout de 15 s (antes 4 s):
+los datos (nombre, CURP, teléfono) vienen de la sesión y no se
+muestran editables; sin sesión se cotiza solo con nombre y CURP
+(obligatoria), el teléfono es opcional (la fecha es nullable en la BD
+y el paciente se resuelve por CURP). Las escrituras del flujo de cotizar usan timeout de 15 s (antes 4 s):
 con el backend frío tras arrancar Docker, la respuesta tardaba más de
 4 s, el cliente abortaba y el servidor igual creaba el folio, así que
 el front decía que no se creó nada aunque el folio sí existía (falso
 negativo). Si aun así falla la respuesta, la página vuelve a consultar
-los folios del teléfono y, si el folio sí se creó, lo muestra en el
+los folios de la CURP y, si el folio sí se creó, lo muestra en el
 panel derecho como creado, con una nota de que la respuesta tardó.
 
-### WhatsApp con sesión
+### WhatsApp sin sesión, con la CURP
 
-Si hay sesión, `/whatsapp` arranca con EL paciente logueado: su nombre,
-su teléfono (10 dígitos) y sus folios activos, con botón por folio para
-seguir con ese trámite. "Abrir WhatsApp" desde App guarda el teléfono
-de sesión en `sessionStorage` (`saluddigna-wa-telefono`); "Continuar en
-WhatsApp" desde Historial guarda además el folio
-(`saluddigna-wa-folio`). Sin sesión, WhatsApp arranca con el teléfono
-vacío: hay que escribirlo o iniciar sesión. La máquina de estados
-del bot no cambió.
+`/whatsapp` **no** usa la sesión: siempre pide la CURP del paciente
+antes de tocar ningún dato. Una tercera persona puede continuar el
+trámite del paciente con su CURP. Los botones "Abrir WhatsApp" (App) y
+"Continuar en WhatsApp" (Historial) solo navegan a `/whatsapp`; el bot
+pide la CURP al entrar. La máquina de estados del bot no cambió,
+salvo que ahora puede completar la reservación entera (estudio →
+clínica → fecha y hora) y que una fecha sin hora hace que ofrezca las
+horas libres de ese día.
 
 ## Si ves "Modo demo sin backend"
 
@@ -487,15 +490,14 @@ curl http://localhost:8080/api/health
 
 ## Demo de Ana en 5 pasos
 
-1. **Web** (`/cotizar`): como Ana, cotiza el Ultrasonido abdominal ($850), elige
+1. **Web** (`/cotizar`): como Ana (CURP `GALA900514MDFRPN00`), cotiza el Ultrasonido abdominal ($850), elige
    Clínica Puebla Centro y pulsa "Cerrar sin confirmar (simular interrupción)".
    Anota el folio `SD-2026-0001`.
-2. **WhatsApp** (`/whatsapp`): escribe el teléfono de Ana `2220000001`
-   (o inicia sesión como Ana y arranca con sus datos) y luego escribe
-   "quiero continuar mi trámite". El bot reconoce a Ana por su teléfono,
+2. **WhatsApp** (`/whatsapp`): escribe "hola", el bot pide la CURP; escribe la CURP de Ana
+   `GALA900514MDFRPN00` y luego "quiero continuar mi trámite". El bot reconoce a Ana por su CURP,
    recupera el trámite pendiente y le ofrece seguir donde se quedó. El
    evento `canal.cambiado` queda en el log.
-3. **Call Center** (`/asesor`): busca por teléfono `2220000001` o por
+3. **Call Center** (`/asesor`): busca por CURP `GALA900514MDFRPN00` o por
    folio. El asesor ve estudio, clínica, precio y datos pendientes **sin
    pedirle a Ana que repita nada**. Completa el dato pendiente si hace falta.
 4. **App** (`/app`): Ana confirma su cita (fecha y hora) y ve la cita
@@ -513,7 +515,7 @@ lecturas de trámites no inventan datos, avisan que no se guardó nada.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| POST | `/api/auth/login` | Login paciente (CURP, teléfono o primer nombre) o staff, devuelve JWT + paciente |
+| POST | `/api/auth/login` | Login paciente (solo CURP) o staff, devuelve JWT + paciente |
 | POST | `/api/auth/registro` | Registro de paciente en BD + auto-login (CURP obligatoria, teléfono opcional; 409 si la CURP ya tiene contraseña) |
 | GET | `/api/auth/yo` | Perfil de la sesión (Bearer), `{paciente, usuario, rol}` |
 | POST | `/api/pacientes` | Registrar paciente |
@@ -524,14 +526,15 @@ lecturas de trámites no inventan datos, avisan que no se guardó nada.
 | GET | `/api/pacientes` | Lista de todos los pacientes |
 | PUT | `/api/pacientes/{id}` | Editar paciente (acepta `curp`; `telefono: ""` borra el teléfono) |
 | GET | `/api/admin/usuarios` | Usuarios con cantidad de folios (solo por URL en el front) |
-| POST | `/api/admin/usuarios` | Crear usuario (409 si el teléfono ya existe) |
+| POST | `/api/admin/usuarios` | Crear usuario (409 si la CURP ya existe) |
 | PUT | `/api/admin/usuarios/{id}` | Editar usuario (la contraseña solo cambia si se envía una nueva) |
 | DELETE | `/api/admin/usuarios/{id}` | Borrar usuario con sus folios, citas y eventos (`{"foliosEliminados": N}`) |
 | GET | `/api/admin/staff` | Cuentas del personal, sin password_hash (solo por URL en el front) |
 | POST | `/api/admin/staff` | Crear cuenta de personal (409 si el usuario ya existe) |
 | PUT | `/api/admin/staff/{id}` | Editar cuenta (la contraseña solo cambia si se envía una nueva) |
 | DELETE | `/api/admin/staff/{id}` | Borrar cuenta (409 si es el último admin o tu propia cuenta) |
-| POST | `/api/tramites` | Crear trámite |
+| POST | `/api/pacientes/{id}/restablecer-password` | Restablecer contraseña de paciente (asesor/admin; body opcional `{"password"}`; responde `{"nuevaPassword"}` solo en esa respuesta) |
+| POST | `/api/tramites` | Crear trámite (acepta `curp` opcional) |
 | GET | `/api/tramites/{id}` | Trámite + estado actual (UUID) |
 | GET | `/api/tramites/folio/{folio}` | Trámite por folio (ej. SD-2026-0001) |
 | GET | `/api/tramites?telefono=` | Trámites de un paciente |
@@ -546,14 +549,15 @@ lecturas de trámites no inventan datos, avisan que no se guardó nada.
 | GET | `/api/tramites/{id}/timeline` | Línea de tiempo del trámite |
 | GET | `/api/journey/{tramiteId}` | Patient Journey (estado + timeline + siguiente paso) |
 | GET | `/api/journey/folio/{folio}` | Patient Journey por folio |
+| GET | `/api/disponibilidad/parrilla?clinicaId&fecha&estudioId?&exceptoTramiteId?` | Parrilla de horarios 07:00–16:30 (slots de 30 min, con ocupados, según solape real) |
 | GET | `/api/estudios`, `/api/clinicas` | Catálogo |
-| POST | `/api/canales/whatsapp/mensaje` | WhatsApp simulado (resuelve identidad y recupera trámite) |
+| POST | `/api/canales/whatsapp/mensaje` | WhatsApp simulado (resuelve por CURP y recupera trámite; sin CURP la pide) |
 | POST | `/api/canales/call-center/nota` | Nota del asesor |
 
 Catálogo de eventos: `paciente.registrado`, `tramite.iniciado`,
 `cotizacion.creada`, `clinica.seleccionada`, `identidad.verificada`,
 `canal.cambiado`, `dato.pendiente.completado`, `cita.confirmada`,
-`atencion.concluida`, `tramite.recuperado`.
+`atencion.concluida`, `tramite.recuperado`, `password.restablecida`.
 
 ## Estructura
 

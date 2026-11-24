@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { isApiError, login } from '../api';
+import PasswordInput from '../components/PasswordInput';
 
 export default function LoginPage() {
   const [usuario, setUsuario] = useState('');
@@ -39,26 +40,27 @@ export default function LoginPage() {
   return (
     <div>
       <h1>Iniciar sesión</h1>
-      <p className="muted">Entra con tu CURP o tu teléfono (o tu primer nombre) y tu contraseña. La sesión dura lo que dura esta pestaña: al cerrarla se cierra sola y la app arranca limpia, sin usuario cargado.</p>
+      <p className="muted">Entra con tu CURP y tu contraseña. La sesión dura lo que dura esta pestaña: al cerrarla se cierra sola y la app arranca limpia, sin usuario cargado.</p>
 
       <section className="card" style={{ maxWidth: 480 }}>
         <form onSubmit={handleSubmit} className="form">
           <label>
-            CURP o teléfono
+            CURP
             <input
               value={usuario}
-              onChange={(e) => setUsuario(e.target.value)}
-              placeholder="CURP, 2220000001 o ana"
+              onChange={(e) => setUsuario(e.target.value.toUpperCase().replace(/\s/g, ''))}
+              placeholder="Escribe tu CURP"
               autoComplete="username"
+              maxLength={18}
+              style={{ textTransform: 'uppercase' }}
               required
             />
           </label>
           <label>
             Contraseña
-            <input
-              type="password"
+            <PasswordInput
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder="Tu contraseña"
               autoComplete="current-password"
               required
@@ -79,10 +81,13 @@ export default function LoginPage() {
 
       <section className="card" style={{ maxWidth: 480, marginTop: 16 }}>
         <h2>Cuentas de prueba</h2>
+        <p className="muted">El login de pacientes es solo con CURP. El personal entra con su usuario.</p>
         <ul>
-          <li>Ana García López — CURP o teléfono <code>2220000001</code> — contraseña <code>ana123</code></li>
-          <li>Luis Hernández Torres — <code>2221112233</code> — <code>luis123</code></li>
-          <li>María Fernanda Ruiz — <code>2224445566</code> — <code>maria123</code></li>
+          <li>Ana García López — CURP <code>GALA900514MDFRPN00</code> — contraseña <code>ana123</code></li>
+          <li>Luis Hernández Torres — CURP <code>HETL850322HDFRRS01</code> — <code>luis123</code></li>
+          <li>María Fernanda Ruiz — CURP <code>RUXF920809MDFZXR02</code> — <code>maria123</code></li>
+          <li>Carlos Mendoza Vega — CURP <code>MEVC781130HDFNGR03</code> — <code>carlos123</code></li>
+          <li>Fernanda López Díaz — CURP <code>LODF010617MDFPZR04</code> — <code>fernanda123</code></li>
           <li>Asesor — usuario <code>asesor</code> — <code>asesor123</code></li>
           <li>Admin — usuario <code>admin</code> — <code>admin123</code></li>
           <li>Doctor — usuario <code>doctor</code> — <code>doctor123</code></li>

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { isApiError, registro } from '../api';
+import PasswordInput from '../components/PasswordInput';
 import { fechaDesdeCurp, normalizarCurp, validarCurp } from '../curp';
 import { esFechaLatinaValida, formatearFecha, parsearFechaLatina } from '../fechas';
 
@@ -175,10 +176,9 @@ export default function RegistroPage() {
           )}
           <label>
             Contraseña (mínimo 6 caracteres)
-            <input
-              type="password"
+            <PasswordInput
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               placeholder="Mínimo 6 caracteres"
               autoComplete="new-password"
               minLength={6}

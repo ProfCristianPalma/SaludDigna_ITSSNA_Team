@@ -4,8 +4,10 @@ import jakarta.validation.Valid;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import mx.saluddigna.omnicanal.identidad.domain.Paciente;
+import mx.saluddigna.omnicanal.seguridad.JwtService;
 import mx.saluddigna.omnicanal.tramite.TramiteService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -26,10 +29,12 @@ public class PacienteController {
 
     private final PacienteService service;
     private final TramiteService tramites;
+    private final JwtService jwtService;
 
-    public PacienteController(PacienteService service, TramiteService tramites) {
+    public PacienteController(PacienteService service, TramiteService tramites, JwtService jwtService) {
         this.service = service;
         this.tramites = tramites;
+        this.jwtService = jwtService;
     }
 
     @PostMapping
@@ -114,5 +119,52 @@ public class PacienteController {
     public Paciente actualizar(@PathVariable UUID id, @RequestBody ActualizarPacienteRequest req) {
         return service.actualizar(
                 id, req.nombre(), req.telefono(), req.email(), req.fechaNacimiento(), req.tramiteId(), req.curp());
+    }
+
+    public record RestablecerPasswordRequest(String password) {
+    }
+
+    /**
+     * POST /api/pacientes/{id}/restablecer-password → pone una contraseña
+     * nueva al paciente y la devuelve UNA VEZ: {"nuevaPassword": "..."}.
+     * Body opcional {"password": "..."}: si no viene (o viene vacío),
+     * se genera una aleatoria legible de 12 caracteres; si viene, mínimo
+     * 6 (400 si no). La contraseña se guarda con hash PBKDF2; el hash y
+     * la contraseña actual NUNCA se devuelven. El cambio queda en el log
+     * del trámite más reciente del paciente, si tiene alguno.
+     *
+     * GATING (decisión 2026-11-24): el resto de la API demo NO bloquea
+     * por rol — SecurityConfig solo valida el Bearer y deja el rol en un
+     * atributo, y los controladores no lo exigen — pero este endpoint sí
+     * es sensible, así que exige JWT Bearer válido Y rol ASESOR o
+     * ADMINISTRADOR sacado del token (401 sin token o token inválido,
+     * 403 con otro rol). El front solo lo expone en /admin/usuarios,
+     * que solo se muestra con sesión de asesor/admin. El fallback
+     * X-Rol de demo NO vale aquí: sin Bearer no hay acceso.
+     */
+    @PostMapping("/{id}/restablecer-password")
+    public Map<String, Object> restablecerPassword(
+            @PathVariable UUID id,
+            @RequestBody(required = false) RestablecerPasswordRequest req,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        exigirStaff(authorization);
+        String nueva = service.restablecerPassword(id, req == null ? null : req.password());
+        return Map.of("nuevaPassword", nueva);
+    }
+
+    /** JWT Bearer válido con rol ASESOR o ADMINISTRADOR; si no, 401/403. */
+    private void exigirStaff(String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Falta el token de sesión");
+        }
+        String token = authorization.substring(7);
+        if (!jwtService.esValido(token)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token inválido o expirado");
+        }
+        String rol = jwtService.extraerRol(token);
+        if (rol == null || !Set.of("ASESOR", "ADMINISTRADOR").contains(rol.toUpperCase())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Solo el personal (asesor o administrador) puede restablecer contraseñas");
+        }
     }
 }

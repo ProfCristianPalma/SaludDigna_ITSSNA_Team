@@ -116,18 +116,11 @@ export default function HistorialPage() {
     };
   }, [cargar]);
 
-  function continuarEnWhatsapp(t: Tramite) {
-    // La CURP (o el teléfono) y el folio se pasan por sessionStorage:
-    // solo viven en esta pestaña, no quedan guardados para la próxima visita.
-    window.sessionStorage.setItem('saluddigna-wa-telefono', t.paciente?.curp ?? t.paciente?.telefono ?? paciente?.curp ?? paciente?.telefono ?? '');
-    window.sessionStorage.setItem('saluddigna-wa-folio', t.folio);
-  }
-
   if (sinSesion) {
     return (
       <div>
         <h1>Mi historial de folios</h1>
-        <p className="muted">Para ver tus folios, primero inicia sesión con tu CURP o tu teléfono y tu contraseña.</p>
+        <p className="muted">Para ver tus folios, primero inicia sesión con tu CURP y tu contraseña.</p>
         <div className="actions">
           <Link className="btn btn-primary" to="/login">Iniciar sesión</Link>
           <Link className="btn btn-secondary" to="/registro">Crear cuenta</Link>
@@ -201,7 +194,7 @@ export default function HistorialPage() {
                 Ver mi Journey
               </Link>
               {t.estado !== 'ATENDIDO' && t.estado !== 'NO_PRESENTADO' && t.estado !== 'NO_REALIZADO' && t.estado !== 'CANCELADO' && (
-                <Link className="btn btn-primary" to="/whatsapp" onClick={() => continuarEnWhatsapp(t)}>
+                <Link className="btn btn-primary" to="/whatsapp">
                   Continuar en WhatsApp
                 </Link>
               )}

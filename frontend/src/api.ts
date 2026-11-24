@@ -1,4 +1,4 @@
-import { esCurp, normalizarCurp } from './curp';
+import { esCurp, fechaDesdeCurp, normalizarCurp } from './curp';
 import { MOCK_CLINICAS, MOCK_ESTUDIOS } from './mock';
 import type { Clinica, Estudio, Evento, Journey, Paciente, Tramite } from './types';
 
@@ -111,16 +111,11 @@ function normalizarSesion(raw: Sesion): Sesion {
   };
 }
 
-/** Login de paciente (CURP, teléfono a 10 dígitos o primer nombre + contraseña) o staff. */
+/** Login solo con CURP (+ contraseña) para pacientes; el staff entra con su usuario (asesor/admin/doctor). El teléfono y el primer nombre ya no resuelven a nadie: el backend devuelve el 401 genérico. */
 export async function login(usuario: string, password: string): Promise<Sesion> {
-  // CURP: se manda normalizada (mayúsculas, sin espacios), nunca como teléfono.
-  const usuarioFinal = esCurp(usuario)
-    ? normalizarCurp(usuario)
-    : (() => {
-        // Solo se normaliza si parece teléfono (7+ dígitos); "ana"/"asesor" se mandan tal cual.
-        const digitos = normalizarTelefono(usuario);
-        return /^\d{7,}$/.test(digitos) ? digitos : usuario.trim();
-      })();
+  // CURP: se manda normalizada (mayúsculas, sin espacios). Cualquier
+  // otro valor (usuario de staff) se manda tal cual, sin normalizar a teléfono.
+  const usuarioFinal = esCurp(usuario) ? normalizarCurp(usuario) : usuario.trim();
   const sesion = normalizarSesion(
     await fetchJson<Sesion>('/auth/login', {
       method: 'POST',
@@ -441,12 +436,73 @@ export async function actualizarPaciente(
   return normalizarPaciente(raw);
 }
 
+const PASSWORD_LEGIBLE = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+/** Contraseña aleatoria legible (sin 0/O/1/I/l, que se confunden). Por defecto 12 caracteres. */
+export function generarPasswordLegible(longitud = 12): string {
+  let out = '';
+  const buf = new Uint32Array(longitud);
+  window.crypto.getRandomValues(buf);
+  for (const n of buf) out += PASSWORD_LEGIBLE[n % PASSWORD_LEGIBLE.length];
+  return out;
+}
+
+/**
+ * Restablece la contraseña de un paciente (POST /api/pacientes/{id}/restablecer-password).
+ * Devuelve la contraseña nueva UNA VEZ: {nuevaPassword}. Sin password el
+ * backend genera una legible de 12 caracteres. Exige sesión de asesor o
+ * administrador (401/403 si no). La contraseña actual nunca se devuelve:
+ * las guardadas son hash PBKDF2 y no se pueden mostrar.
+ */
+export async function restablecerPasswordPaciente(id: string, password?: string): Promise<string> {
+  const raw = await fetchJson<{ nuevaPassword: string }>(
+    `/pacientes/${encodeURIComponent(id)}/restablecer-password`,
+    {
+      method: 'POST',
+      body: JSON.stringify(password ? { password } : {}),
+    },
+    ESCRITURA_TIMEOUT_MS,
+  );
+  return raw.nuevaPassword;
+}
+
 /** Horas ocupadas ("HH:mm") de una clínica en un día (GET /api/disponibilidad/dia). */
 export async function getHorasOcupadas(clinicaId: string, fechaISO: string): Promise<string[]> {
   const raw = await fetchJson<{ horasOcupadas?: string[] }>(
     `/disponibilidad/dia?clinicaId=${encodeURIComponent(clinicaId)}&fecha=${encodeURIComponent(fechaISO)}`,
   );
   return Array.isArray(raw.horasOcupadas) ? raw.horasOcupadas : [];
+}
+
+export interface SlotParrilla {
+  hora: string;
+  ocupado: boolean;
+}
+
+export interface Parrilla {
+  clinicaId: number;
+  fecha: string;
+  estudioId: number | null;
+  duracionMin: number;
+  slots: SlotParrilla[];
+}
+
+/**
+ * Parrilla de horarios de una clínica en un día (GET /api/disponibilidad/parrilla):
+ * 20 slots de 30 min, 07:00–16:30, con su estado libre/ocupado según las
+ * citas CONFIRMADAS de la base de datos. `estudioId` fija la duración
+ * para el solape (sin él, 30 min).
+ */
+export async function getParrilla(
+  clinicaId: string,
+  fechaISO: string,
+  estudioId?: string,
+  exceptoTramiteId?: string,
+): Promise<Parrilla> {
+  const params = new URLSearchParams({ clinicaId, fecha: fechaISO });
+  if (estudioId) params.set('estudioId', estudioId);
+  if (exceptoTramiteId) params.set('exceptoTramiteId', exceptoTramiteId);
+  return fetchJson<Parrilla>(`/disponibilidad/parrilla?${params.toString()}`);
 }
 
 /**
@@ -635,9 +691,11 @@ export async function registrarEventoCheckIn(tramiteId: string): Promise<Evento>
 
 export interface CrearTramiteInput {
   nombre: string;
-  /** Teléfono del paciente; puede ser null/vacío si viene pacienteId (p. ej. reservación solo con CURP). */
+  /** Teléfono del paciente (opcional); puede ser null/vacío si viene pacienteId o curp. */
   telefono: string | null;
-  /** Si ya se conoce el paciente (búsqueda por CURP en Asesor), se usa directo sin buscar por teléfono. */
+  /** CURP del paciente: resuelve por GET /pacientes?curp= y, si no existe, lo registra solo con CURP (la fecha se deriva de la CURP). */
+  curp?: string;
+  /** Si ya se conoce el paciente (búsqueda por CURP en Asesor, sesión en Web), se usa directo sin buscar. */
   pacienteId?: string;
   /** Opcional: el formulario de cotizar ya no la pide. Sin sesión se
       crea el paciente solo con nombre y teléfono (la fecha es nullable
@@ -653,14 +711,49 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
   const telefono = normalizarTelefono(input.telefono);
   {
     // Con pacienteId conocido (CURP resuelta en Asesor, sesión en Web)
-    // no se busca por teléfono: el paciente puede no tener teléfono.
-    // Sin pacienteId, el flujo de antes: buscar por teléfono y, si no
-    // existe, registrarlo.
+    // no se busca: el paciente puede no tener teléfono.
+    // Con CURP se resuelve por CURP y, si no existe, se registra solo
+    // con CURP (la fecha de nacimiento se deriva de la CURP).
+    // Sin pacienteId ni CURP, el flujo de antes: buscar por teléfono y,
+    // si no existe, registrarlo.
     let paciente: Paciente;
     if (input.pacienteId) {
       paciente = { id: input.pacienteId, nombre: input.nombre, curp: null, telefono: telefono || null, fechaNacimiento: input.fechaNacimiento ?? '' };
+    } else if (input.curp && esCurp(input.curp)) {
+      const curp = normalizarCurp(input.curp);
+      const fechaCurp = fechaDesdeCurp(curp) ?? input.fechaNacimiento;
+      try {
+        paciente = await buscarPacientePorCurp(curp);
+      } catch (err) {
+        // Red caída u otro error HTTP: se propaga, no se intenta registrar.
+        if (!isApiError(err) || err.status !== 404) throw err;
+        // No existe (404): se registra solo con CURP; la fecha solo se
+        // manda si se derivó de la CURP (el backend también la deriva).
+        try {
+          paciente = await fetchJson<Paciente>(
+            '/pacientes',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                nombre: input.nombre,
+                curp,
+                telefono: telefono || null,
+                email: '',
+                ...(fechaCurp ? { fechaNacimiento: fechaCurp } : {}),
+              }),
+            },
+            ESCRITURA_TIMEOUT_MS,
+          );
+        } catch (err2) {
+          if (isApiError(err2) && err2.status === 409) {
+            paciente = await buscarPacientePorCurp(curp);
+          } else {
+            throw err2;
+          }
+        }
+      }
     } else if (!telefono) {
-      throw new ApiError(400, 'Falta el teléfono o la CURP del paciente para crear el trámite.');
+      throw new ApiError(400, 'Falta la CURP del paciente para crear el trámite.');
     } else {
     // El backend crea trámites por pacienteId (UUID), no por nombre/teléfono.
     // 1) Busca al paciente solo por teléfono (es la clave única; la fecha
@@ -760,8 +853,14 @@ export async function confirmar(tramiteId: string, fechaCita: string): Promise<T
   return normalizeTramite(raw);
 }
 
+/**
+ * Mensaje al bot de WhatsApp. La identidad es SOLO la CURP: se manda
+ * normalizada y el backend la pide si no viene o no está registrada.
+ * El teléfono ya no identifica a nadie en este canal (el campo
+ * `telefono` del request se eliminó en el backend).
+ */
 export async function enviarWhatsapp(
-  telefono: string,
+  curp: string,
   mensaje: string,
   /** Folio en contexto: el trámite que el usuario venía siguiendo. El backend lo prefiere para no adivinar entre varios folios. */
   folio?: string,
@@ -774,10 +873,6 @@ export async function enviarWhatsapp(
   /** Si el bot entendió la intención (false = respondió "No entendí"). */
   entendido?: boolean;
 }> {
-  // CURP: se manda tal cual (normalizada), el backend la detecta y
-  // resuelve al paciente. Cualquier otro valor va como teléfono a
-  // 10 dígitos. Antes esto normalizaba TODO a dígitos y destruía la CURP.
-  const tel = esCurp(telefono) ? normalizarCurp(telefono) : normalizarTelefono(telefono);
   // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
   // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso, opciones, entendido } y,
   // si el paciente tiene varios folios activos y no dijo cual, { tramites }.
@@ -785,7 +880,11 @@ export async function enviarWhatsapp(
   // la página avisa que el mensaje no se envió ni se guardó.
   const raw = await fetchJson<Record<string, unknown>>('/canales/whatsapp/mensaje', {
     method: 'POST',
-    body: JSON.stringify({ telefono: tel, mensaje, ...(folio ? { folio } : {}) }),
+    body: JSON.stringify({
+      ...(curp.trim() ? { curp: normalizarCurp(curp) } : {}),
+      mensaje,
+      ...(folio ? { folio } : {}),
+    }),
   });
   const tramiteRaw = raw.tramite as Record<string, unknown> | null | undefined;
   const tramitesRaw = raw.tramites as Record<string, unknown>[] | undefined;
