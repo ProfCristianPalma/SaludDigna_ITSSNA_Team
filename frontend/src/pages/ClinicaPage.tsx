@@ -2,13 +2,17 @@ import { useCallback, useEffect, useState } from 'react';
 import { atenderTramite, getCitasClinica, isApiError, registrarEventoCheckIn } from '../api';
 import type { CitaClinica } from '../api';
 import EstadoBadge from '../components/EstadoBadge';
+import VistaPersonal from '../components/VistaPersonal';
 
 // Clínica = recepción: citas de TODOS los pacientes (no el historial
 // de un solo paciente; eso es /historial). Los datos vienen del DTO
 // plano GET /api/clinica/citas, no de entidades JPA.
+//
+// Vista de personal: el contenido solo se monta con sesión de asesor
+// o admin (VistaPersonal). Sin sesión no se llama a la API.
 type Filtro = 'CONFIRMADO' | 'ATENDIDO' | 'TODOS';
 
-export default function ClinicaPage() {
+function ContenidoClinica() {
   const [citas, setCitas] = useState<CitaClinica[]>([]);
   const [filtro, setFiltro] = useState<Filtro>('CONFIRMADO');
   const [busqueda, setBusqueda] = useState('');
@@ -164,5 +168,13 @@ export default function ClinicaPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+export default function ClinicaPage() {
+  return (
+    <VistaPersonal titulo="Clínica — recepción">
+      <ContenidoClinica />
+    </VistaPersonal>
   );
 }

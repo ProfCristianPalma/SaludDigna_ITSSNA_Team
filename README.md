@@ -69,7 +69,7 @@ cd frontend && npm install && npm run dev
 | Rol staff | Usuario | Contraseña | Uso |
 |---|---|---|---|
 | Asesor (Call Center) | `asesor` | `asesor123` | Consola `/asesor` |
-| Administrador | `admin` | `admin123` | Tablero `/journey` |
+| Administrador | `admin` | `admin123` | Clínica, Asesor y `/admin/usuarios` |
 
 También vale el primer nombre como usuario de paciente (`ana` + `ana123`).
 En la demo también vale el header `X-Rol: Paciente | Asesor | Administrador`
@@ -84,19 +84,33 @@ La app arranca en `/` (Bienvenida). Desde ahí se va a todo lo demás:
 |---|---|---|
 | `/` | Bienvenida | Presentación de Salud Digna y de cada canal; botones a login, registro y cotizar |
 | `/cotizar` (alias `/web`) | Web | Cotizar un estudio y crear un folio nuevo |
-| `/login` | Iniciar sesión | Ventana separada; tras entrar, va a `/app` |
+| `/login` | Iniciar sesión | Ventana separada; tras entrar, va a `/app` (paciente) o a `/asesor` (asesor/admin) |
 | `/registro` | Crear cuenta | Ventana separada; tras crearla, entra directo a `/app` |
 | `/app` | App | Tus citas (exige sesión, muestra tu nombre y solo tus folios) |
 | `/historial` | Mi historial | TODOS tus folios, del más reciente al más viejo |
 | `/whatsapp` | WhatsApp | Continuar un trámite con el bot (con tu sesión, arranca con tus datos) |
-| `/asesor` | Call Center | Consola del asesor (busca por teléfono, folio o nombre) |
-| `/clinica` | Clínica | Recepción: citas confirmadas de TODOS los pacientes |
+| `/asesor` | Call Center | Consola del asesor (busca por teléfono, folio o nombre) — **solo personal** |
+| `/clinica` | Clínica | Recepción: citas confirmadas de TODOS los pacientes — **solo personal** |
 | `/journey` | Journey | Tu recorrido paso a paso, en tiempo real |
-| `/admin/usuarios` | Administración de usuarios | **Solo por URL** (sin botón ni enlace): listado de usuarios con CRUD real contra Postgres |
+| `/admin/usuarios` | Administración de usuarios | **Solo por URL** (sin botón ni enlace) y **solo personal**: listado de usuarios con CRUD real contra Postgres |
 
 Login y Registro son ventanas separadas y se puede navegar entre ellas
 y al inicio: Login tiene "Crear cuenta" y "Volver a inicio"; Registro
 tiene "Iniciar sesión" y "Volver a inicio".
+
+## Vistas de personal: Clínica, Asesor y Admin
+
+`/clinica`, `/asesor` y `/admin/usuarios` son vistas de personal: solo
+las ve quien entró como asesor (`asesor` / `asesor123`) o admin
+(`admin` / `admin123`). Sin sesión, la página pide el login de
+personal y **no carga ningún dato** (ni citas ni pacientes ni
+usuarios); con sesión de paciente, avisa que es vista de personal y
+enlaza a la App y al Historial. La App (`/app`) y el Historial
+(`/historial`) son al revés: solo de paciente.
+
+El control es a nivel de front en este demo: las API no exigen rol
+todavía, así que quien conozca la URL de un endpoint podría llamarlo
+directo. Para el hackatón el candado está en la página, no en la API.
 
 ## Teléfonos a 10 dígitos, sin +52 (momentáneo)
 
@@ -190,8 +204,9 @@ banner "Modo demo sin backend" mientras el backend no responde.
 
 `/admin/usuarios` es una herramienta demo de administración: **solo se
 entra escribiendo la URL**, no hay botón, no hay enlace desde ninguna
-página y no se menciona en la bienvenida. Tampoco tiene gate de auth
-extra (el resto del demo tampoco lo tiene).
+página y no se menciona en la bienvenida. Además es vista de personal:
+pide sesión de asesor o admin, como Clínica y Asesor (ver
+"Vistas de personal").
 
 - **Lista:** todos los usuarios de Postgres con su cantidad de folios,
   buscador por nombre o teléfono.

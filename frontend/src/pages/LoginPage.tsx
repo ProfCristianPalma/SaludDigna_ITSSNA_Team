@@ -14,8 +14,13 @@ export default function LoginPage() {
     setError('');
     setCargando(true);
     try {
-      await login(usuario, password);
-      navigate('/app');
+      const sesion = await login(usuario, password);
+      // Cada quien a su lugar: el personal a su consola, el paciente a su App.
+      if (sesion.rol === 'ASESOR' || sesion.rol === 'ADMINISTRADOR') {
+        navigate('/asesor');
+      } else {
+        navigate('/app');
+      }
     } catch (err) {
       setError(
         isApiError(err) && err.status === 401
@@ -77,6 +82,7 @@ export default function LoginPage() {
           <li>Luis Hernández Torres — <code>2221112233</code> — <code>luis123</code></li>
           <li>María Fernanda Ruiz — <code>2224445566</code> — <code>maria123</code></li>
           <li>Asesor — usuario <code>asesor</code> — <code>asesor123</code></li>
+          <li>Admin — usuario <code>admin</code> — <code>admin123</code></li>
         </ul>
       </section>
     </div>

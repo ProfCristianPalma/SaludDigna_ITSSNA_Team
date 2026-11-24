@@ -13,8 +13,19 @@ import {
 import type { Evento, Tramite } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 import Timeline from '../components/Timeline';
+import VistaPersonal from '../components/VistaPersonal';
 
+// Vista de personal: el contenido solo se monta con sesión de asesor
+// o admin (VistaPersonal). Sin sesión no se busca ni se muestra nada.
 export default function AsesorPage() {
+  return (
+    <VistaPersonal titulo="Call Center — consola del asesor">
+      <ContenidoAsesor />
+    </VistaPersonal>
+  );
+}
+
+function ContenidoAsesor() {
   // La búsqueda arranca vacía: ningún teléfono de ejemplo cargado.
   const [busqueda, setBusqueda] = useState('');
   const [tramites, setTramites] = useState<Tramite[]>([]);

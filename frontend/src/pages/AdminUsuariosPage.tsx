@@ -8,13 +8,23 @@ import {
   normalizarTelefono,
 } from '../api';
 import type { UsuarioAdmin, UsuarioAdminInput } from '../api';
+import VistaPersonal from '../components/VistaPersonal';
 
 // Administración de usuarios: SOLO se entra escribiendo la URL
 // /admin/usuarios. No hay botón ni enlace desde ninguna otra página,
-// ni se menciona en la bienvenida. Herramienta demo, sin gate de auth
-// extra: el resto del demo tampoco lo tiene. Todo es Postgres real:
+// ni se menciona en la bienvenida. Vista de personal: el contenido
+// solo se monta con sesión de asesor o admin (VistaPersonal); sin
+// sesión no se carga ningún usuario. Todo es Postgres real:
 // crear, editar y borrar aquí queda guardado de forma permanente.
 export default function AdminUsuariosPage() {
+  return (
+    <VistaPersonal titulo="Administración de usuarios">
+      <ContenidoAdminUsuarios />
+    </VistaPersonal>
+  );
+}
+
+function ContenidoAdminUsuarios() {
   const [usuarios, setUsuarios] = useState<UsuarioAdmin[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [cargando, setCargando] = useState(true);
