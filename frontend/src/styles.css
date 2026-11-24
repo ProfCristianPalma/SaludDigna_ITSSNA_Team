@@ -1,16 +1,16 @@
 :root {
-  --azul: #0b5fa5;
-  --azul-oscuro: #084a82;
-  --verde: #00a19a;
-  --verde-wa: #075e54;
-  --verde-wa-claro: #dcf8c6;
-  --fondo: #f4f7f9;
-  --texto: #1c2733;
-  --muted: #5b6b7a;
-  --borde: #dde5ec;
+  --azul: #004d43;
+  --azul-oscuro: #003b34;
+  --verde: #008073;
+  --verde-wa: #004d43;
+  --verde-wa-claro: #b7e4d6;
+  --fondo: #fafcfb;
+  --texto: #123c37;
+  --muted: #506a66;
+  --borde: #d9dee3;
   --blanco: #ffffff;
-  --amarillo: #fff3cd;
-  --rojo: #dc3545;
+  --amarillo: #f6bd43;
+  --rojo: #79520c;
 }
 
 * { box-sizing: border-box; }
@@ -54,8 +54,7 @@ h3 { font-size: 1rem; margin: 1rem 0 0.5rem; }
 .nav-links a { color: #fff; text-decoration: none; padding: 8px 12px; border-radius: 8px; }
 .nav-links a:hover { background: rgba(255, 255, 255, 0.15); }
 .nav-links a.active { background: var(--verde); }
-/* Nombre de la sesión en la barra azul: blanco, sin recorte ni
-   truncado (antes era .muted gris sobre azul y se veía cortado). */
+/* Nombre de la sesión en la barra de navegación. */
 .sesion-nombre { color: #fff; font-weight: 600; white-space: nowrap; padding: 8px 4px; }
 /* Listas de pasos realizados/faltantes en el Historial. */
 .pasos-lista { margin: 6px 0 0; padding-left: 20px; }
@@ -64,7 +63,7 @@ h3 { font-size: 1rem; margin: 1rem 0 0.5rem; }
 
 .mock-banner {
   background: var(--amarillo);
-  color: #664d03;
+  color: var(--azul);
   text-align: center;
   padding: 10px 16px;
   font-weight: 600;
@@ -96,15 +95,15 @@ button, .btn { font: inherit; cursor: pointer; }
 .btn-small { padding: 6px 10px; font-size: 0.85rem; background: var(--verde); color: #fff; border: none; border-radius: 6px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
 .precio { font-size: 1.1rem; }
-.notice { background: #e7f3ff; border: 1px solid #b6d7f5; border-radius: 8px; padding: 12px; margin-top: 16px; }
+.notice { background: #e6f5f1; border: 1px solid #b7e4d6; border-radius: 8px; padding: 12px; margin-top: 16px; }
 
 .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
-.badge-info { background: #e7f3ff; color: var(--azul); }
+.badge-info { background: #d9f1eb; color: var(--azul); }
 .badge-primary { background: var(--azul); color: #fff; }
-.badge-success { background: #d4edda; color: #155724; }
-.badge-warning { background: var(--amarillo); color: #664d03; }
-.badge-danger { background: #f8d7da; color: #721c24; }
-.chip { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #eef2f5; font-size: 0.8rem; font-weight: 700; }
+.badge-success { background: #b7e4d6; color: var(--azul); }
+.badge-warning { background: var(--amarillo); color: var(--azul); }
+.badge-danger { background: #f9dfaa; color: #694500; }
+.chip { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e9eeed; font-size: 0.8rem; font-weight: 700; }
 .chip-grande { padding: 8px 14px; font-size: 0.95rem; margin-right: 8px; }
 .canales { display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -114,6 +113,21 @@ button, .btn { font: inherit; cursor: pointer; }
 .dato-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
 
 /* WhatsApp */
+.whatsapp-page {
+  --azul: #0b5fa5;
+  --verde: #00a19a;
+  --verde-wa: #075e54;
+  --verde-wa-claro: #dcf8c6;
+  --texto: #1c2733;
+  --muted: #5b6b7a;
+  --borde: #dde5ec;
+  --amarillo: #fff3cd;
+  color: var(--texto);
+}
+.whatsapp-page .badge-info { background: #e7f3ff; color: var(--azul); }
+.whatsapp-page .badge-success { background: #d4edda; color: #155724; }
+.whatsapp-page .badge-warning { background: var(--amarillo); color: #664d03; }
+.whatsapp-page .badge-danger { background: #f8d7da; color: #721c24; }
 .wa-shell { max-width: 720px; border: 1px solid var(--borde); border-radius: 12px; overflow: hidden; background: #ece5dd; }
 .wa-header { background: var(--verde-wa); color: #fff; display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
 .wa-header small { display: block; opacity: 0.85; }
@@ -131,7 +145,7 @@ button, .btn { font: inherit; cursor: pointer; }
 .phone { width: 100%; max-width: 420px; border: 1px solid var(--borde); border-radius: 24px; overflow: hidden; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); }
 .phone-header { background: var(--azul); color: #fff; display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
 .phone-body { padding: 18px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
-.cita-card { background: #eaf6f5; border-color: #bfe8e5; }
+.cita-card { background: #e6f5f1; border-color: #7fd4c8; }
 .steps-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
 
 /* Timeline y stepper */
@@ -145,7 +159,7 @@ button, .btn { font: inherit; cursor: pointer; }
 .step-dot {
   width: 32px; height: 32px; border-radius: 50%; margin: 0 auto 6px;
   display: flex; align-items: center; justify-content: center;
-  background: #eef2f5; border: 2px solid var(--borde); font-weight: 800;
+  background: #e9eeed; border: 2px solid var(--borde); font-weight: 800;
 }
 .step-done { color: var(--texto); font-weight: 700; }
 .step-done .step-dot { background: var(--verde); border-color: var(--verde); color: #fff; }
