@@ -161,6 +161,9 @@ public class CanalController {
 
     private static final DateTimeFormatter FORMATO_LATINO_HORA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
+    /** Formato en el que se le muestra la hora al usuario: HH:mm. */
+    private static final DateTimeFormatter FORMATO_HORA = DateTimeFormatter.ofPattern("HH:mm");
+
     /** Mañana en DD/MM/AAAA (fecha sugerida para confirmar la cita). */
     private static String manana() {
         return LocalDate.now().plusDays(1).format(FORMATO_LATINO);
