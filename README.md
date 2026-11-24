@@ -108,10 +108,17 @@ prefijo +52 / 0052 / 52 solo cuando sobran dígitos. Antes, "+52 ..." y
 duplicado: por eso un historial por teléfono podía salir vacío aunque
 los folios sí existieran. La migración Flyway
 `V5__telefonos_sin_lada.sql` convierte los teléfonos ya guardados
-(para bases nuevas, V2/V3 ya siembran a 10 dígitos). Si un paciente
+(V2/V3 siembran con +52 como antes y V5 los normaliza a 10 dígitos al
+arrancar). Si un paciente
 estaba duplicado (+52 y sin +52), V5 solo normaliza la fila más
 antigua; revisa la lista en `GET /api/pacientes` y borra el duplicado
 sin trámites.
+
+> **Nunca edites una migración Flyway ya aplicada** (V1, V2, V3…):
+> Flyway valida el checksum de cada migración aplicada en la BD y
+> rechaza el arranque si cambió. Los cambios de esquema o datos van
+> siempre en una migración nueva (V6, V7…), como hizo V5 con los
+> teléfonos.
 
 ## Login y registro (BD real)
 
