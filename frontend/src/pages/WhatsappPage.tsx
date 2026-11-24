@@ -116,7 +116,7 @@ export default function WhatsappPage() {
   }
 
   return (
-    <div>
+    <div className="whatsapp-page">
       <h1>WhatsApp — continúa tu trámite</h1>
       <p className="muted">
         El bot te reconoce por tu CURP: escríbela y dime en qué te ayudo. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Quien tenga tu CURP puede continuar tu trámite por ti.
