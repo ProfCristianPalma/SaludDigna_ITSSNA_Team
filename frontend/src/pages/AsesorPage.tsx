@@ -333,7 +333,12 @@ function ContenidoAsesor() {
           setResFechaLatina('');
           setResHora('');
           setResMensaje(
-            `${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa con ese folio, sin crear uno nuevo.`,
+            // CONFIRMADO: la cita ya está agendada; se da el resumen
+            // completo y NO se ofrece continuar el flujo. En los demás
+            // estados se ofrece retomar con solo los pasos que faltan.
+            existente.yaAgendada
+              ? existente.mensaje
+              : `${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa con ese folio, sin crear uno nuevo.`,
           );
           return;
         } catch {

@@ -508,6 +508,16 @@ public class CanalController {
             // ofrecen los estudios (el trámite se crea al elegir uno).
         }
 
+        // Consultar el trámite ("quiero continuar mi tramite", "ver
+        // mi reservacion", "mi cita"): el paciente habla de su
+        // trámite/estudio/reservación, no elige una opción numérica ni
+        // da una fecha/hora. Se responde con el resumen según el
+        // estado (retomar con lo que falta, o la cita ya agendada).
+        // Va antes de resolver el folio, como pedir-lista/volver.
+        if (esConsultarTramite(norm, texto)) {
+            return respuestaConsultarTramite(paciente, activos, req.folio());
+        }
+
         // 1) Folio explícito en el texto (SD-2026-XXXX): manda sobre el contexto.
         Matcher folioEnTexto = FOLIO_PATTERN.matcher(texto);
         if (folioEnTexto.find()) {
@@ -1271,24 +1281,44 @@ public class CanalController {
         Optional<Tramite> existente = tramites.buscarActivoPorEstudio(paciente.getId(), estudio.getId(), exceptoTramiteId);
         if (existente.isEmpty()) return Optional.empty();
         Tramite t = existente.get();
-        String nombre = paciente.getNombre().split(" ")[0];
+        List<String> opciones = new ArrayList<>(opcionesPara(t));
+        opciones.add("Ver mis folios");
+        // El mensaje es el resumen compartido con Web/Asesor: si está
+        // CONFIRMADO, la cita ya está agendada y se da toda la
+        // información, sin ofrecer continuar el flujo; si falta algo,
+        // se pregunta si quiere retomarlo con lo que falta.
+        return Optional.of(new ResultadoBot(textoRetomar(t), true, opciones, t));
+    }
+
+    /** Texto de retomar para un trámite: cita ya agendada (CONFIRMADO, con toda la información) o qué falta para completarlo. */
+    private String textoRetomar(Tramite t) {
+        Map<String, Object> resumen = tramites.resumenRetomar(t);
+        if (Boolean.TRUE.equals(resumen.get("yaAgendada"))) {
+            return (String) resumen.get("mensaje");
+        }
         List<String> faltantes = TramiteService.faltantes(t);
         String faltaTexto = faltantes.isEmpty()
                 ? "tu cita ya está confirmada"
                 : "te falta: " + textoFaltantes(faltantes);
-        List<String> opciones = new ArrayList<>(opcionesPara(t));
-        opciones.add("Ver mis folios");
-        String texto = "Ya tienes un trámite activo de " + estudio.getNombre() + " (folio " + t.getFolio()
-                + ", " + t.getEstado().name() + "), " + nombre + ". ¿Quieres retomarlo? Seguimos con ese folio: "
-                + faltaTexto + ".";
-        return Optional.of(new ResultadoBot(texto, true, opciones, t));
+        return (String) resumen.get("mensaje") + " Seguimos con ese folio: " + faltaTexto + ".";
     }
 
-    /** Texto humano de lo que le falta a un trámite ("elegir clínica", "elegir fecha y hora"). */
+    /** Una línea de lo que falta (o la cita agendada) para listar varios trámites. */
+    private String descripcionCortaRetomar(Tramite t) {
+        if (t.getEstado() == EstadoTramite.CONFIRMADO) {
+            return "cita agendada el " + (t.getFechaCita() == null ? "sin fecha" : t.getFechaCita().format(FORMATO_LATINO_HORA))
+                    + " en " + nombreClinica(t);
+        }
+        List<String> faltantes = TramiteService.faltantes(t);
+        return faltantes.isEmpty() ? "listo para atender" : "te falta: " + textoFaltantes(faltantes);
+    }
+
+    /** Texto humano de lo que le falta a un trámite ("cotizar el estudio", "elegir clínica", "confirmar la cita"). */
     private static String textoFaltantes(List<String> faltantes) {
         List<String> partes = new ArrayList<>();
+        if (faltantes.contains("cotizado")) partes.add("cotizar el estudio");
         if (faltantes.contains("clinica")) partes.add("elegir clínica");
-        if (faltantes.contains("fecha") || faltantes.contains("hora")) partes.add("elegir fecha y hora");
+        if (faltantes.contains("fecha") || faltantes.contains("hora")) partes.add("confirmar la cita (fecha y hora)");
         return String.join(" y ", partes);
     }
 
@@ -1543,6 +1573,85 @@ public class CanalController {
                 || norm.contains("todos mis folios") || norm.contains("todos mis tramites")
                 || norm.equals("seguimiento") || norm.contains("dar seguimiento")
                 || norm.contains("seguimiento de mis folios") || norm.contains("seguir mis folios");
+    }
+
+    /**
+     * El mensaje habla de su trámite/estudio/reservación/cita y pide
+     * verlo o continuarlo ("quiero continuar mi tramite", "ver mi
+     * reservacion", "mi cita", "como va mi estudio"). Tags: tramite,
+     * estudio, reservacion, reserva, cita. NO es consultar cuando el
+     * mensaje trae una selección de folio, una fecha u hora, un cambio
+     * o reprogramación, o pide otro/nuevo estudio (eso es cotizar).
+     * Un número suelto ("1", "2") o una hora ("10") nunca es
+     * consultar: no traen la palabra del trámite.
+     */
+    private boolean esConsultarTramite(String norm, String texto) {
+        if (!Pattern.compile("\\b(tramite|estudio|reservacion|reserva|cita)\\b").matcher(norm).find()) return false;
+        if (SELECCION_PATTERN.matcher(texto).find() || FOLIO_PATTERN.matcher(texto).find()
+                || ORDINAL_MASC.matcher(norm).find() || ORDINAL_FEM.matcher(norm).find()) return false;
+        if (extraerFechaHora(texto).isPresent() || extraerHora(texto).isPresent()
+                || pareceFechaHora(texto) || pareceFecha(texto)) return false;
+        if (norm.contains("cambiar") || norm.contains("reprogramar") || norm.contains("mover mi cita")
+                || norm.contains("otro estudio") || norm.contains("nuevo estudio")
+                || norm.contains("otro tramite") || norm.contains("nuevo tramite")) return false;
+        // Nombra un estudio concreto sin pedir continuar/verlo: es
+        // cotizar ese estudio, no consultar el trámite.
+        if (elegirEstudio(norm).isPresent()
+                && !norm.contains("continuar") && !norm.contains("seguir") && !norm.contains("retomar")
+                && !norm.contains("ver") && !norm.contains("revisar") && !norm.contains("consultar")
+                && !norm.contains("como va") && !norm.contains("cuando es") && !norm.contains("donde es")) return false;
+        return norm.contains("mi ") || norm.contains("quiero") || norm.contains("continuar")
+                || norm.contains("seguir") || norm.contains("retomar") || norm.contains("ver")
+                || norm.contains("revisar") || norm.contains("consultar") || norm.contains("como va")
+                || norm.contains("cuando") || norm.contains("donde") || norm.contains("cual")
+                || norm.contains("tengo")
+                || norm.equals("tramite") || norm.equals("estudio") || norm.equals("reservacion")
+                || norm.equals("reserva") || norm.equals("cita");
+    }
+
+    /**
+     * Respuesta a "quiero continuar mi tramite" / "ver mi reservacion"
+     * / "mi cita": el resumen del trámite según su estado. Con un solo
+     * activo, ese trámite queda en contexto para seguir en él; con
+     * varios, se listan con su estado y lo que les falta; sin activos,
+     * se ofrecen los estudios. Un CONFIRMADO se responde con la cita ya
+     * agendada y toda su información, no con "¿quieres retomarlo?".
+     */
+    private Map<String, Object> respuestaConsultarTramite(Paciente paciente, List<Tramite> activos, String folioContexto) {
+        String nombre = paciente.getNombre().split(" ")[0];
+        if (activos.isEmpty()) {
+            return respuestaSinTramite("Hola " + nombre + ", aún no tienes trámites activos. Puedo cotizarte un estudio:\n" + textoEstudios(),
+                    "ELEGIR_ESTUDIO", true, opcionesEstudios(), paciente.getCurp());
+        }
+        // Con folio en contexto, se consulta ese trámite.
+        if (folioContexto != null && !folioContexto.isBlank()) {
+            try {
+                Tramite enContexto = tramites.buscarPorFolio(folioContexto.trim().toUpperCase());
+                if (enContexto.getPaciente().getId().equals(paciente.getId())
+                        && !TramiteService.ESTADOS_TERMINALES.contains(enContexto.getEstado())) {
+                    return respuestaConTramite(enContexto, activos,
+                            new ResultadoBot(textoRetomar(enContexto), true, opcionesPara(enContexto), enContexto));
+                }
+            } catch (ResponseStatusException e) {
+                // Folio en contexto inválido: se sigue con la lista.
+            }
+        }
+        if (activos.size() == 1) {
+            Tramite t = activos.get(0);
+            return respuestaConTramite(t, activos, new ResultadoBot(textoRetomar(t), true, opcionesPara(t), t));
+        }
+        StringBuilder sb = new StringBuilder("Claro, ").append(nombre).append(", tienes ").append(activos.size())
+                .append(" trámites activos:\n");
+        for (int i = 0; i < activos.size(); i++) {
+            Tramite t = activos.get(i);
+            sb.append(i + 1).append(") ").append(t.getFolio()).append(" — ").append(nombreEstudio(t))
+                    .append(" (").append(t.getEstado().name()).append("): ").append(descripcionCortaRetomar(t)).append("\n");
+        }
+        sb.append("¿Con cuál seguimos? Responde con el folio, por ejemplo ").append(activos.get(0).getFolio()).append(".");
+        Map<String, Object> respuesta = respuestaSinTramite(sb.toString(), "ELEGIR_FOLIO", true, foliosComoOpciones(activos));
+        respuesta.put("tramites", activos);
+        respuesta.put("curp", paciente.getCurp());
+        return respuesta;
     }
 
     /** Volver / cambiar de folio: olvida el contexto y lista los folios para elegir otro. "cambiar clínica" y "otro estudio" NO son volver. */

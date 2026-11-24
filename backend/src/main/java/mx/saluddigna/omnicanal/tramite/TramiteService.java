@@ -103,15 +103,68 @@ public class TramiteService {
                 .findFirst();
     }
 
-    /** Qué le falta a un trámite activo para completarse: clínica / fecha / hora. */
+    /** Qué le falta a un trámite activo para completarse: cotizar el
+     * estudio (INICIADO/DATOS_PENDIENTES sin estudio ni precio),
+     * elegir clínica y confirmar fecha y hora. Un CONFIRMADO no tiene
+     * faltantes: solo falta la atención en clínica. */
     public static List<String> faltantes(Tramite tramite) {
         List<String> f = new ArrayList<>();
+        if (tramite.getEstudioId() == null || tramite.getPrecioCotizado() == null) f.add("cotizado");
         if (tramite.getClinicaId() == null) f.add("clinica");
         if (tramite.getFechaCita() == null) {
             f.add("fecha");
             f.add("hora");
         }
         return f;
+    }
+
+    private static final DateTimeFormatter FORMATO_LATINO_HORA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+
+    /**
+     * Resumen para retomar un trámite activo. Lo comparten el 409 de
+     * duplicado (Web/Asesor) y el bot de WhatsApp, así el mensaje es el
+     * mismo en todos los canales: folio, estado, estudio, costo,
+     * clínica, fecha/hora y qué falta ("cotizado" / "clinica" /
+     * "fecha" / "hora"). Si está CONFIRMADO, lo único que falta es la
+     * atención en clínica: el mensaje dice que la cita ya está
+     * agendada, con toda la información pertinente, y NO ofrece
+     * continuar el flujo (yaAgendada=true). Si falta algo, el mensaje
+     * pregunta si quiere retomarlo.
+     */
+    public Map<String, Object> resumenRetomar(Tramite t) {
+        String estudioNombre = t.getEstudioId() == null ? "sin estudio aún"
+                : estudios.findById(t.getEstudioId()).map(Estudio::getNombre).orElse("ese estudio");
+        String clinicaNombre = t.getClinicaId() == null ? null
+                : clinicas.findById(t.getClinicaId()).map(Clinica::getNombre).orElse(null);
+        List<String> faltan = faltantes(t);
+        boolean yaAgendada = t.getEstado() == EstadoTramite.CONFIRMADO;
+        String mensaje;
+        if (yaAgendada) {
+            mensaje = "Ya está agendada tu cita de " + estudioNombre
+                    + (t.getPrecioCotizado() != null ? " ($" + t.getPrecioCotizado().toPlainString() + ")" : "")
+                    + " en " + (clinicaNombre == null ? "la clínica" : clinicaNombre)
+                    + ", el " + (t.getFechaCita() == null ? "sin fecha" : t.getFechaCita().format(FORMATO_LATINO_HORA))
+                    + ". Tu folio es " + t.getFolio() + ". No necesitas hacer nada más; te esperamos en la clínica.";
+        } else if (t.getEstudioId() == null) {
+            mensaje = "Ya tienes un trámite activo (folio " + t.getFolio() + ", " + t.getEstado().name()
+                    + ") y aún no tiene estudio elegido. ¿Quieres retomarlo?";
+        } else {
+            mensaje = "Ya tienes un trámite activo de " + estudioNombre + " (folio " + t.getFolio()
+                    + ", " + t.getEstado().name() + "). ¿Quieres retomarlo?";
+        }
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("tramiteExistente", Boolean.TRUE);
+        r.put("tramiteId", t.getId().toString());
+        r.put("folio", t.getFolio());
+        r.put("estado", t.getEstado().name());
+        r.put("estudio", estudioNombre);
+        r.put("precio", t.getPrecioCotizado() == null ? null : t.getPrecioCotizado().toPlainString());
+        r.put("clinica", clinicaNombre);
+        r.put("fechaCita", t.getFechaCita() == null ? null : t.getFechaCita().toString());
+        r.put("faltantes", String.join(",", faltan));
+        r.put("yaAgendada", yaAgendada);
+        r.put("mensaje", mensaje);
+        return r;
     }
 
     /**
@@ -125,18 +178,12 @@ public class TramiteService {
     private void exigirSinDuplicadoActivo(UUID pacienteId, Long estudioId, UUID exceptoTramiteId) {
         Optional<Tramite> existente = buscarActivoPorEstudio(pacienteId, estudioId, exceptoTramiteId);
         if (existente.isEmpty()) return;
-        Tramite t = existente.get();
-        String estudioNombre = estudios.findById(estudioId).map(Estudio::getNombre).orElse("ese estudio");
-        Map<String, Object> cuerpo = new LinkedHashMap<>();
-        cuerpo.put("tramiteExistente", Boolean.TRUE);
-        cuerpo.put("tramiteId", t.getId().toString());
-        cuerpo.put("folio", t.getFolio());
-        cuerpo.put("estado", t.getEstado().name());
-        cuerpo.put("estudio", estudioNombre);
-        cuerpo.put("faltantes", String.join(",", faltantes(t)));
-        cuerpo.put("mensaje", "Ya tienes un trámite activo de " + estudioNombre + " (folio " + t.getFolio()
-                + ", " + t.getEstado().name() + "). ¿Quieres retomarlo?");
-        throw new ResponseStatusException(HttpStatus.CONFLICT, jsonObjeto(cuerpo));
+        // El cuerpo es el resumen de retomar (folio, estado, estudio,
+        // costo, clínica, fecha/hora, faltantes y mensaje según el
+        // estado). Llega al front porque server.error.include-message
+        // está en always: sin eso, Spring omite el "message" del JSON
+        // de error y el front solo veía "Conflict" (bug 2026-11-24).
+        throw new ResponseStatusException(HttpStatus.CONFLICT, jsonObjeto(resumenRetomar(existente.get())));
     }
 
     /**

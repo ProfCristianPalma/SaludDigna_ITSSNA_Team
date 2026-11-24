@@ -18,9 +18,12 @@ export function isMockMode(): boolean {
  */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message?: string) {
+  /** Cuerpo crudo de la respuesta de error (tal cual llegó del backend), para parsear cargas útiles que no vienen en el mensaje (p. ej. el JSON del trámite existente del 409). */
+  readonly body?: string;
+  constructor(status: number, message?: string, body?: string) {
     super(message ?? `HTTP ${status}`);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -203,7 +206,13 @@ async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs = 4000):
     if (token) headers.Authorization = `Bearer ${token}`;
     for (const [k, v] of Object.entries(init?.headers ?? {})) headers[k] = v as string;
     const res = await fetch(`${API_BASE}${path}`, { ...init, headers, signal: controller.signal });
-    if (!res.ok) throw new ApiError(res.status, await mensajeDeError(res, path));
+    if (!res.ok) {
+      // El cuerpo se lee UNA vez y se guarda en el error: el mensaje
+      // se deriva de él, y el cuerpo crudo queda en err.body por si
+      // el parseo del mensaje no basta (409 de duplicado).
+      const texto = await res.text().catch(() => '');
+      throw new ApiError(res.status, mensajeDeTexto(texto, res.status, path), texto);
+    }
     markLive();
     return (await res.json()) as T;
   } finally {
@@ -211,63 +220,134 @@ async function fetchJson<T>(path: string, init?: RequestInit, timeoutMs = 4000):
   }
 }
 
-/** Mensaje del backend (Spring devuelve {"message": "..."}), para mostrarlo en pantalla. */
-async function mensajeDeError(res: Response, path: string): Promise<string> {
-  const texto = await res.text().catch(() => '');
+/** Mensaje del backend a partir del cuerpo de error ya leído. Spring devuelve {"message": "..."} (con server.error.include-message=always); un ProblemDetail trae "detail"/"title"; un cuerpo propio puede traer "mensaje". Sin mensaje útil, queda el "error" (la frase, p. ej. "Conflict") o el fallback HTTP. */
+function mensajeDeTexto(texto: string, status: number, path: string): string {
   if (texto) {
     try {
-      const json = JSON.parse(texto) as { message?: string; error?: string };
+      const json = JSON.parse(texto) as { message?: string; mensaje?: string; detail?: string; title?: string; error?: string };
       if (json.message) return json.message;
+      if (json.mensaje) return json.mensaje;
+      if (json.detail) return json.detail;
       if (json.error) return json.error;
     } catch {
       return texto;
     }
   }
-  return `HTTP ${res.status} en ${path}`;
+  return `HTTP ${status} en ${path}`;
 }
 
 // --- Trámite ya existente (retomar en vez de duplicar) ----------------
 // Cuando se intenta crear/cotizar un estudio que el paciente ya tiene
-// en un trámite ACTIVO, el backend devuelve 409 con un JSON en el
-// mensaje: {tramiteExistente, tramiteId, folio, estado, estudio,
-// faltantes ("clinica,fecha,hora"), mensaje}. El front lo lee con esto
-// y ofrece retomar ese folio con solo los pasos que le faltan, sin
-// crear uno nuevo. Otros 409 (hueco ocupado, check-in duplicado,
-// CURP/teléfono en choque) traen mensaje plano y devuelven null.
+// en un trámite ACTIVO, el backend devuelve 409 con el resumen de
+// retomar: {tramiteExistente, tramiteId, folio, estado, estudio,
+// precio, clinica, fechaCita, faltantes ("cotizado,clinica,fecha,hora"),
+// yaAgendada, mensaje}. El front lo lee con esto y ofrece retomar ese
+// folio con solo los pasos que le faltan, sin crear uno nuevo. Si el
+// trámite está CONFIRMADO (yaAgendada), la cita ya está agendada y NO
+// se ofrece continuar el flujo: se muestra el resumen de la cita.
+// Otros 409 (hueco ocupado, check-in duplicado, CURP/teléfono en
+// choque) traen mensaje plano y devuelven null.
 export interface TramiteExistenteInfo {
   tramiteId: string;
   folio: string;
   estado: string;
   estudio: string;
-  /** Subconjunto de "clinica" / "fecha" / "hora". */
+  /** Subconjunto de "cotizado" / "clinica" / "fecha" / "hora". */
   faltantes: string[];
   mensaje: string;
+  /** Costo del estudio o null si aún no está cotizado. */
+  precio: string | null;
+  /** Nombre de la clínica o null si aún no se eligió. */
+  clinica: string | null;
+  /** Fecha y hora de la cita en ISO o null si aún no se confirmó. */
+  fechaCita: string | null;
+  /** true cuando el trámite está CONFIRMADO: la cita ya está agendada, no se ofrece continuar el flujo. */
+  yaAgendada: boolean;
+}
+
+/** Extrae el JSON del trámite existente de un texto: el texto entero,
+ * o el objeto {...} que contenga. Spring puede envolver el motivo como
+ * `409 CONFLICT "{...}"`, así que también se prueba el recorte entre
+ * la primera "{" y la última "}". */
+function extraerJsonTramiteExistente(texto: string): Record<string, unknown> | null {
+  const candidatos: string[] = [texto];
+  const ini = texto.indexOf('{');
+  const fin = texto.lastIndexOf('}');
+  if (ini >= 0 && fin > ini) candidatos.push(texto.slice(ini, fin + 1));
+  for (const c of candidatos) {
+    try {
+      const j = JSON.parse(c) as Record<string, unknown>;
+      if (j && typeof j === 'object') return j;
+    } catch {
+      // sigue con el siguiente candidato
+    }
+  }
+  return null;
+}
+
+function leerTramiteExistente(j: Record<string, unknown>): TramiteExistenteInfo | null {
+  if (j.tramiteExistente !== true && j.tramiteExistente !== 'true') return null;
+  if (typeof j.tramiteId !== 'string') return null;
+  const faltantesRaw = j.faltantes;
+  const faltantes: string[] = Array.isArray(faltantesRaw)
+    ? (faltantesRaw as unknown[]).filter((x): x is string => typeof x === 'string')
+    : typeof faltantesRaw === 'string'
+      ? faltantesRaw.split(',').filter(Boolean)
+      : [];
+  return {
+    tramiteId: j.tramiteId,
+    folio: typeof j.folio === 'string' ? j.folio : '',
+    estado: typeof j.estado === 'string' ? j.estado : '',
+    estudio: typeof j.estudio === 'string' ? j.estudio : '',
+    faltantes,
+    mensaje: typeof j.mensaje === 'string' ? j.mensaje : typeof j.message === 'string' ? j.message : '',
+    precio: typeof j.precio === 'string' ? j.precio : j.precio != null ? String(j.precio) : null,
+    clinica: typeof j.clinica === 'string' ? j.clinica : null,
+    fechaCita: typeof j.fechaCita === 'string' ? j.fechaCita : null,
+    yaAgendada:
+      j.yaAgendada === true ||
+      j.yaAgendada === 'true' ||
+      (typeof j.estado === 'string' && j.estado === 'CONFIRMADO'),
+  };
 }
 
 export function parsearTramiteExistente(err: unknown): TramiteExistenteInfo | null {
   if (!isApiError(err) || err.status !== 409) return null;
-  try {
-    const j = JSON.parse(err.message) as Record<string, unknown>;
-    if (j.tramiteExistente !== true || typeof j.tramiteId !== 'string') return null;
-    const faltantesRaw = typeof j.faltantes === 'string' ? j.faltantes : '';
-    return {
-      tramiteId: j.tramiteId,
-      folio: typeof j.folio === 'string' ? j.folio : '',
-      estado: typeof j.estado === 'string' ? j.estado : '',
-      estudio: typeof j.estudio === 'string' ? j.estudio : '',
-      faltantes: faltantesRaw ? faltantesRaw.split(',').filter(Boolean) : [],
-      mensaje: typeof j.mensaje === 'string' ? j.mensaje : '',
-    };
-  } catch {
-    return null;
+  // 1) El mensaje tal cual (con server.error.include-message=always el
+  //    "message" de Spring ya es el JSON del trámite existente).
+  const deMensaje = extraerJsonTramiteExistente(err.message);
+  if (deMensaje) {
+    const info = leerTramiteExistente(deMensaje);
+    if (info) return info;
   }
+  // 2) El cuerpo crudo de la respuesta: puede ser el JSON de error de
+  //    Spring (con "message" adentro) o el mapa del trámite directamente.
+  //    Esto cubre el caso en que el "message" no llegó (config ausente).
+  if (err.body) {
+    try {
+      const cuerpo = JSON.parse(err.body) as Record<string, unknown>;
+      if (typeof cuerpo.message === 'string') {
+        const deCuerpo = extraerJsonTramiteExistente(cuerpo.message);
+        if (deCuerpo) {
+          const info = leerTramiteExistente(deCuerpo);
+          if (info) return info;
+        }
+      }
+      const directo = leerTramiteExistente(cuerpo);
+      if (directo) return directo;
+    } catch {
+      // el cuerpo no era JSON: no hay nada que parsear
+    }
+  }
+  return null;
 }
 
 /** Texto humano de lo que le falta a un trámite para completarse. */
 export function textoFaltantes(faltantes: string[]): string {
   const partes: string[] = [];
+  if (faltantes.includes('cotizado')) partes.push('cotizar el estudio');
   if (faltantes.includes('clinica')) partes.push('elegir clínica');
-  if (faltantes.includes('fecha') || faltantes.includes('hora')) partes.push('elegir fecha y hora');
+  if (faltantes.includes('fecha') || faltantes.includes('hora')) partes.push('confirmar la cita (fecha y hora)');
   return partes.length > 0 ? partes.join(' y ') : 'ya está completo';
 }
 

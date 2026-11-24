@@ -191,7 +191,13 @@ export default function WebPage() {
           setHora('');
           window.sessionStorage.setItem(FOLIO_KEY, t.folio);
           setMensaje(
-            `${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa abajo con ese folio, sin crear uno nuevo.`,
+            // CONFIRMADO: la cita ya está agendada; se da el resumen
+            // completo (estudio, costo, clínica, fecha y hora) y NO se
+            // ofrece continuar el flujo. En los demás estados se
+            // ofrece retomar con solo los pasos que faltan.
+            existente.yaAgendada
+              ? existente.mensaje
+              : `${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa abajo con ese folio, sin crear uno nuevo.`,
           );
           await recargarFolios();
           return;
