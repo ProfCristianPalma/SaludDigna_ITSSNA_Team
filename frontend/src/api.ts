@@ -156,6 +156,47 @@ export async function registro(input: RegistroInput): Promise<Sesion> {
   return sesion;
 }
 
+export interface RegistrarPacienteAsesorInput {
+  nombre: string;
+  /** CURP obligatoria (normalizada: mayúsculas, sin espacios). */
+  curp: string;
+  /** Teléfono opcional: vacío o null es válido. */
+  telefono: string | null;
+  /** Correo opcional en el registro por asesor (a diferencia del registro normal, donde es obligatorio). */
+  email: string | null;
+  fechaNacimiento: string;
+  /** Contraseña obligatoria (mínimo 6): el backend la guarda como hash PBKDF2. */
+  password: string;
+}
+
+/**
+ * Registro de un paciente nuevo DESDE el asesor (POST /api/pacientes).
+ * NO usa /api/auth/registro a propósito: `registro()` hace setToken y
+ * sobrescribiría la sesión del asesor con la del paciente nuevo. Aquí
+ * no se toca el token: el asesor sigue siendo el asesor y el paciente
+ * creado puede iniciar sesión después con su CURP + esta contraseña.
+ * Teléfono y correo son opcionales; nombre, CURP, fecha de nacimiento
+ * y contraseña son obligatorios. Sin fallback mock.
+ */
+export async function registrarPacienteAsesor(input: RegistrarPacienteAsesorInput): Promise<Paciente> {
+  const raw = await fetchJson<Paciente>(
+    '/pacientes',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        nombre: input.nombre.trim(),
+        curp: normalizarCurp(input.curp),
+        telefono: input.telefono ? normalizarTelefono(input.telefono) : null,
+        email: input.email?.trim() ? input.email.trim() : null,
+        fechaNacimiento: input.fechaNacimiento,
+        password: input.password,
+      }),
+    },
+    ESCRITURA_TIMEOUT_MS,
+  );
+  return normalizarPaciente(raw);
+}
+
 /** Perfil de la sesión actual (GET /api/auth/yo). 401 si el token no vale. */
 export async function getPerfilYo(): Promise<PerfilYo> {
   const raw = await fetchJson<PerfilYo>('/auth/yo');
@@ -456,6 +497,8 @@ export function normalizeTramite(raw: Record<string, unknown>): Tramite {
     fechaCita: (raw.fechaCita as string | null) ?? null,
     canalOrigen: (raw.canalOrigen as Tramite['canalOrigen']) ?? 'WEB',
     datosPendientes,
+    eliminado: raw.eliminado === true,
+    eliminadoMotivo: (raw.eliminadoMotivo as string | null) ?? null,
   };
 }
 
@@ -697,6 +740,70 @@ export async function noRealizadoTramite(tramiteId: string, motivo: string): Pro
   const raw = await fetchJson<Record<string, unknown>>(
     `/tramites/${encodeURIComponent(tramiteId)}/no-realizado`,
     { method: 'POST', body: JSON.stringify({ motivo }) },
+  );
+  return normalizeTramite(raw);
+}
+
+export interface EditarTramiteInput {
+  /** null = sin cambio. */
+  estudioId?: string | null;
+  /** null = sin cambio. */
+  clinicaId?: string | null;
+  /** Fecha y hora ISO ("2026-11-25T10:00:00"); null = sin cambio. */
+  fechaCita?: string | null;
+  /** OBLIGATORIA: explica qué se cambió y por qué; queda en el log. 400 si viene vacía. */
+  nota: string;
+}
+
+/**
+ * Asesor: edita la reservación de un folio (PUT /api/tramites/{id}).
+ * Estudio, clínica y/o fecha y hora; el estado se recomputa y la cita
+ * se sincroniza. 400 sin nota o sin cambios; 409 si el folio está
+ * cerrado o eliminado. Canal CALL_CENTER.
+ */
+export async function editarTramite(tramiteId: string, input: EditarTramiteInput): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        estudioId: input.estudioId ? toNumberId(input.estudioId) : null,
+        clinicaId: input.clinicaId ? toNumberId(input.clinicaId) : null,
+        fechaCita: input.fechaCita ?? null,
+        nota: input.nota,
+        canal: 'CALL_CENTER',
+      }),
+    },
+    ESCRITURA_TIMEOUT_MS,
+  );
+  return normalizeTramite(raw);
+}
+
+/**
+ * Asesor: cancela un folio con su motivo (POST /api/tramites/{id}/cancelar).
+ * 400 si el motivo está vacío; 409 si ya está cerrado o eliminado.
+ * El folio queda CANCELADO con su motivo en el historial y el Journey.
+ */
+export async function cancelarTramite(tramiteId: string, motivo: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/cancelar`,
+    { method: 'POST', body: JSON.stringify({ motivo, canal: 'CALL_CENTER' }) },
+    ESCRITURA_TIMEOUT_MS,
+  );
+  return normalizeTramite(raw);
+}
+
+/**
+ * Asesor: elimina un folio con su motivo (POST /api/tramites/{id}/eliminar).
+ * BORRADO SUAVE: el folio sale de los listados pero su Journey e
+ * historial quedan intactos (solo lectura). 400 si el motivo está
+ * vacío; 409 si ya está cerrado o eliminado.
+ */
+export async function eliminarTramite(tramiteId: string, motivo: string): Promise<Tramite> {
+  const raw = await fetchJson<Record<string, unknown>>(
+    `/tramites/${encodeURIComponent(tramiteId)}/eliminar`,
+    { method: 'POST', body: JSON.stringify({ motivo, canal: 'CALL_CENTER' }) },
+    ESCRITURA_TIMEOUT_MS,
   );
   return normalizeTramite(raw);
 }

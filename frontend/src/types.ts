@@ -77,6 +77,10 @@ export interface Tramite {
   fechaCita?: string | null;
   canalOrigen: Canal;
   datosPendientes: string[];
+  /** Borrado suave (V12): el folio sale de los listados pero su Journey e historial siguen consultables, solo lectura. */
+  eliminado?: boolean;
+  /** Causa que escribió el asesor al eliminar el folio. */
+  eliminadoMotivo?: string | null;
 }
 
 export interface Evento {

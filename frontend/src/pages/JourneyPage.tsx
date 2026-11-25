@@ -53,7 +53,7 @@ const CANAL_POR_PASO: Record<EstadoTramite, string> = {
   ATENDIDO: 'atencion.concluida',
   NO_PRESENTADO: 'cita.no_presentado',
   NO_REALIZADO: 'cita.no_realizado',
-  CANCELADO: 'tramite.iniciado',
+  CANCELADO: 'tramite.cancelado',
 };
 
 export default function JourneyPage() {
@@ -101,7 +101,9 @@ export default function JourneyPage() {
       setCargando(true);
       try {
         const p = await buscarPacientePorCurp(query);
-        const lista = await getTramitesPorPacienteId(p.id);
+        // Los folios eliminados (borrado suave) no salen de la lista:
+        // siguen abriéndose por folio directo, solo lectura.
+        const lista = (await getTramitesPorPacienteId(p.id)).filter((t) => !t.eliminado);
         if (lista.length === 0) {
           setJourney(null);
           setFolios([]);

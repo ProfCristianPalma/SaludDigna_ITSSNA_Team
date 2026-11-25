@@ -63,6 +63,20 @@ public class Tramite {
     @Column(name = "fecha_cita")
     private LocalDateTime fechaCita;
 
+    /**
+     * Borrado suave (V12): TRUE = el folio sale de TODOS los listados
+     * pero NO se borra de la BD: su Journey y su historial (eventos)
+     * siguen consultables por folio/id, solo lectura. Nunca se borra
+     * un tramite en duro: eventos.tramite_id es NOT NULL y el log es
+     * append-only.
+     */
+    @Column(name = "eliminado", nullable = false)
+    private boolean eliminado = false;
+
+    /** Causa que escribio el asesor al eliminar (ver eliminarTramite). */
+    @Column(name = "eliminado_motivo", columnDefinition = "TEXT")
+    private String eliminadoMotivo;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -156,6 +170,22 @@ public class Tramite {
 
     public void setFechaCita(LocalDateTime fechaCita) {
         this.fechaCita = fechaCita;
+    }
+
+    public boolean isEliminado() {
+        return eliminado;
+    }
+
+    public void setEliminado(boolean eliminado) {
+        this.eliminado = eliminado;
+    }
+
+    public String getEliminadoMotivo() {
+        return eliminadoMotivo;
+    }
+
+    public void setEliminadoMotivo(String eliminadoMotivo) {
+        this.eliminadoMotivo = eliminadoMotivo;
     }
 
     public Instant getCreatedAt() {

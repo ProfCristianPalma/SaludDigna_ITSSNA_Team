@@ -1228,7 +1228,7 @@ public class CanalController {
                 yield nuevoTramiteParaEstudio(paciente, tramite, lista.get(n - 1),
                         "Tu trámite " + tramite.getFolio() + " ya fue atendido.");
             }
-            case NO_PRESENTADO, NO_REALIZADO -> {
+            case NO_PRESENTADO, NO_REALIZADO, CANCELADO -> {
                 List<Estudio> lista = estudios.findAll();
                 if (n < 1 || n > lista.size()) yield Optional.empty();
                 yield nuevoTramiteParaEstudio(paciente, tramite, lista.get(n - 1),
@@ -1426,6 +1426,7 @@ public class CanalController {
                 || tramite.getEstado() == EstadoTramite.CONFIRMADO
                 || tramite.getEstado() == EstadoTramite.ATENDIDO
                 || tramite.getEstado() == EstadoTramite.NO_PRESENTADO
+                || tramite.getEstado() == EstadoTramite.CANCELADO
                 || tramite.getEstado() == EstadoTramite.NO_REALIZADO)) {
             sel = numeroSolo(norm);
         }
@@ -1483,7 +1484,7 @@ public class CanalController {
             case INICIADO, DATOS_PENDIENTES -> procesarInicio(paciente, tramite, norm);
             case CONFIRMADO -> procesarConfirmado(paciente, tramite, norm);
             case ATENDIDO -> procesarAtendido(paciente, tramite, norm);
-            case NO_PRESENTADO, NO_REALIZADO -> procesarCerrado(paciente, tramite, norm);
+            case NO_PRESENTADO, NO_REALIZADO, CANCELADO -> procesarCerrado(paciente, tramite, norm);
         };
         if (accion.isPresent()) return accion.get();
         if (esSaludoOAyuda(norm)) return ayuda(paciente, tramite);
@@ -1971,7 +1972,7 @@ public class CanalController {
         return Optional.empty();
     }
 
-    /** Trámite cerrado (NO_PRESENTADO / NO_REALIZADO): como ATENDIDO,
+    /** Trámite cerrado (NO_PRESENTADO / NO_REALIZADO / CANCELADO): como ATENDIDO,
      * se ofrece cotizar otro estudio; nunca se reabre el cerrado. */
     private Optional<ResultadoBot> procesarCerrado(Paciente paciente, Tramite tramite, String norm) {
         String nombre = paciente.getNombre().split(" ")[0];
@@ -2007,6 +2008,8 @@ public class CanalController {
                     .append(" ya se cerró porque no te presentaste a tu cita. Puedo cotizarte otro estudio.");
             case NO_REALIZADO -> sb.append("Tu trámite ").append(tramite.getFolio())
                     .append(" ya se cerró porque no se pudo realizar el estudio. Puedo cotizarte otro estudio.");
+            case CANCELADO -> sb.append("Tu trámite ").append(tramite.getFolio())
+                    .append(" fue cancelado. Puedo cotizarte otro estudio.");
         }
         sb.append("\n").append(listarOpcionesNumeradas(opcionesPara(tramite)));
         sb.append("\nResponde con el nombre de la opción, con su número o con \"opcion 1\" / \"numero 2\".");
@@ -2052,6 +2055,7 @@ public class CanalController {
             case ATENDIDO -> "ya fue atendido";
             case NO_PRESENTADO -> "no se presentó a su cita";
             case NO_REALIZADO -> "no se pudo realizar el estudio";
+            case CANCELADO -> "fue cancelado";
         };
     }
 
@@ -2096,7 +2100,7 @@ public class CanalController {
             case INICIADO, DATOS_PENDIENTES -> opcionesEstudios();
             case CONFIRMADO -> List.of("¿Cuándo es mi cita?", "Ayuda", "Ver mis folios", "Iniciar un trámite nuevo");
             case ATENDIDO -> opcionesEstudios();
-            case NO_PRESENTADO, NO_REALIZADO -> opcionesEstudios();
+            case NO_PRESENTADO, NO_REALIZADO, CANCELADO -> opcionesEstudios();
         };
     }
 

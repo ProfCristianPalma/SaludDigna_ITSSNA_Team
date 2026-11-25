@@ -81,6 +81,22 @@ public class PacienteService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Ya existe un paciente con el telefono " + paciente.getTelefono());
         }
+        // Contraseña del registro por asesor (POST /api/pacientes con
+        // campo `password`): se guarda SOLO el hash PBKDF2 y la clave
+        // en claro se descarta; sin contraseña no se toca el hash (el
+        // registro normal por Web/WhatsApp no manda contraseña y el
+        // paciente queda sin ella, como antes). Minimo 6 (400 si no).
+        // El paciente creado asi inicia sesion con su CURP + esa
+        // contrasena (AuthController.login verifica el hash). El
+        // registro normal (/api/auth/registro) no se toca.
+        if (paciente.getPassword() != null && !paciente.getPassword().isBlank()) {
+            if (paciente.getPassword().length() < 6) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "La contraseña debe tener al menos 6 caracteres");
+            }
+            paciente.setPasswordHash(passwords.hash(paciente.getPassword()));
+            paciente.setPassword(null);
+        }
         return repository.save(paciente);
     }
 

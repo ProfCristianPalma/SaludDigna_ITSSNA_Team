@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -62,6 +63,22 @@ public class TramiteController {
     public record CompletarDatoRequest(String clave, String valor, String canal) {
     }
 
+    /**
+     * Edicion de la reservacion por el asesor: estudio, clinica y/o
+     * fecha y hora (los null son "sin cambio"). La nota es obligatoria
+     * (400 si viene vacia) y queda en el log con los cambios.
+     * Solo tramites no terminales y no eliminados (409 si no).
+     */
+    public record EditarTramiteRequest(Long estudioId, Long clinicaId, LocalDateTime fechaCita,
+                                       String nota, String canal) {
+    }
+
+    public record CancelarTramiteRequest(String motivo, String canal) {
+    }
+
+    public record EliminarTramiteRequest(String motivo, String canal) {
+    }
+
     public record RegistrarEventoRequest(String tipo, String canal, String actor, String payload) {
     }
 
@@ -83,6 +100,40 @@ public class TramiteController {
     @GetMapping("/tramites/{id}")
     public Tramite buscar(@PathVariable UUID id) {
         return service.buscar(id);
+    }
+
+    /**
+     * Asesor: edita la reservacion de un folio (estudio, clinica,
+     * fecha y hora). Nota obligatoria; 409 si el tramite esta cerrado
+     * o eliminado. El estado se recomputa y la cita se sincroniza.
+     */
+    @PutMapping("/tramites/{id}")
+    public Tramite editar(@PathVariable UUID id, @RequestBody EditarTramiteRequest req) {
+        String canal = req.canal() == null || req.canal().isBlank() ? "CALL_CENTER" : req.canal();
+        return service.editarTramite(id, req.estudioId(), req.clinicaId(), req.fechaCita(), req.nota(), canal);
+    }
+
+    /**
+     * Asesor: cancela un folio con su motivo (obligatorio, 400 si
+     * vacio). Estado CANCELADO (terminal), cita en "CANCELADO" (el
+     * hueco queda libre) y evento tramite.cancelado en el log.
+     */
+    @PostMapping("/tramites/{id}/cancelar")
+    public Tramite cancelar(@PathVariable UUID id, @RequestBody CancelarTramiteRequest req) {
+        String canal = req == null || req.canal() == null || req.canal().isBlank() ? "CALL_CENTER" : req.canal();
+        return service.cancelarTramite(id, req == null ? null : req.motivo(), canal);
+    }
+
+    /**
+     * Asesor: elimina un folio con su motivo (obligatorio, 400 si
+     * vacio). BORRADO SUAVE: eliminado=true + estado CANCELADO; el
+     * folio sale de los listados pero su Journey e historial quedan
+     * intactos y consultables por folio (solo lectura).
+     */
+    @PostMapping("/tramites/{id}/eliminar")
+    public Tramite eliminar(@PathVariable UUID id, @RequestBody EliminarTramiteRequest req) {
+        String canal = req == null || req.canal() == null || req.canal().isBlank() ? "CALL_CENTER" : req.canal();
+        return service.eliminarTramite(id, req == null ? null : req.motivo(), canal);
     }
 
     /** Trámite por folio legible, ej. SD-2026-0001 (el {id} de arriba solo acepta UUID).

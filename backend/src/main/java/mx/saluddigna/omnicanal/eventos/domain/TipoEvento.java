@@ -32,6 +32,12 @@ public final class TipoEvento {
      * necesita un tramite_id, así que los "no entendí" sin folio (sin
      * trámites activos) no quedan registrados. */
     public static final String MENSAJE_NO_ENTENDIDO = "mensaje.no_entendido";
+    /** Un asesor editó un trámite (estudio, clínica, fecha/hora). Payload {"accion":"edicion","nota":"...","cambios":"..."}: la nota es obligatoria. */
+    public static final String TRAMITE_EDITADO = "tramite.editado";
+    /** Un asesor canceló un trámite. Payload {"accion":"cancelacion","motivo":"..."}: el motivo es obligatorio. */
+    public static final String TRAMITE_CANCELADO = "tramite.cancelado";
+    /** Un asesor eliminó un trámite (BORRADO SUAVE: solo marca eliminado=true; el trámite y sus eventos se conservan). Payload {"accion":"eliminacion","motivo":"..."}. */
+    public static final String TRAMITE_ELIMINADO = "tramite.eliminado";
 
     private TipoEvento() {
     }

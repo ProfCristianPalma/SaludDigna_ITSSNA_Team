@@ -161,6 +161,7 @@ public class TramiteService {
             case ATENDIDO -> "Atendido";
             case NO_PRESENTADO -> "No se presentó";
             case NO_REALIZADO -> "No se pudo realizar";
+            case CANCELADO -> "Cancelado";
         };
     }
 
@@ -685,6 +686,236 @@ public class TramiteService {
         return tramite;
     }
 
+    /**
+     * Solo tramites no terminales y no eliminados se pueden editar,
+     * cancelar o eliminar (409 si ya esta cerrado o eliminado).
+     */
+    private void exigirEditable(Tramite tramite) {
+        if (tramite.isEliminado()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "El tramite " + tramite.getFolio() + " esta eliminado, no se puede modificar");
+        }
+        if (ESTADOS_TERMINALES.contains(tramite.getEstado())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "El tramite " + tramite.getFolio() + " ya esta cerrado ("
+                            + etiquetaEstado(tramite.getEstado(), null) + "), no se puede modificar");
+        }
+    }
+
+    private String nombreEstudioDe(Long estudioId) {
+        if (estudioId == null) return "sin estudio";
+        return estudios.findById(estudioId).map(Estudio::getNombre).orElse("ese estudio");
+    }
+
+    private String nombreClinicaDe(Long clinicaId) {
+        if (clinicaId == null) return "sin clinica";
+        return clinicas.findById(clinicaId).map(Clinica::getNombre).orElse("esa clinica");
+    }
+
+    /** Estado que corresponde a los datos presentes: estudio+precio -> COTIZADO; +clinica -> CLINICA_SELECCIONADA; +fecha -> CONFIRMADO; sin estudio se conserva INICIADO/DATOS_PENDIENTES. */
+    private static EstadoTramite recomputarEstado(Tramite tramite) {
+        if (tramite.getEstudioId() == null || tramite.getPrecioCotizado() == null) {
+            return tramite.getEstado() == EstadoTramite.DATOS_PENDIENTES
+                    ? EstadoTramite.DATOS_PENDIENTES : EstadoTramite.INICIADO;
+        }
+        if (tramite.getFechaCita() != null && tramite.getClinicaId() != null) return EstadoTramite.CONFIRMADO;
+        if (tramite.getClinicaId() != null) return EstadoTramite.CLINICA_SELECCIONADA;
+        return EstadoTramite.COTIZADO;
+    }
+
+    /** Fecha/hora de cita valida para editar: futura, dentro de la parrilla (07:00-16:30, multiplos de 30) y con el hueco libre (excepto el propio tramite). Mismas reglas que confirmar(). */
+    private void validarFechaCita(LocalDateTime fechaCita, Long clinicaId, Long estudioId, UUID tramiteId) {
+        if (fechaCita.isBefore(LocalDateTime.now())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La fecha y hora de la cita ya pasaron: "
+                            + fechaCita.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")));
+        }
+        LocalTime hora = fechaCita.toLocalTime();
+        if (hora.isBefore(APERTURA) || hora.isAfter(LocalTime.of(16, 30))
+                || hora.getMinute() % DURACION_SLOT_MIN != 0 || hora.getSecond() != 0 || hora.getNano() != 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La hora debe estar dentro de la parrilla 07:00–16:30, en múltiplos de 30 minutos "
+                            + "(07:00, 07:30, …, 16:30). Hora pedida: " + hora.format(FORMATO_HORA) + ".");
+        }
+        Clinica clinica = clinicas.findById(clinicaId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Clinica no encontrada"));
+        int duracionNueva = duracionEstudio(estudioId);
+        if (huecoOcupado(clinicaId, fechaCita, duracionNueva, tramiteId)) {
+            List<String> cercanas = horasLibresCercanas(clinicaId, fechaCita.toLocalDate(),
+                    fechaCita.toLocalTime(), estudioId, tramiteId);
+            String detalle = cercanas.isEmpty()
+                    ? "No quedan horas libres ese día en " + clinica.getNombre() + "."
+                    : "Horas libres cercanas: " + String.join(", ", cercanas) + ".";
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "La hora " + fechaCita.format(FORMATO_HORA) + " está ocupada en " + clinica.getNombre()
+                            + " el " + fechaCita.format(FORMATO_FECHA_LATINA) + ". " + detalle);
+        }
+    }
+
+    /**
+     * Edita la reservacion (asesor): estudio, clinica y/o fecha y hora.
+     * Los parametros null significan "sin cambio" (el front manda los
+     * valores actuales). La NOTA es obligatoria (400 si viene vacia,
+     * en backend y en front): queda en el log con los cambios
+     * antes/despues. Solo tramites no terminales y no eliminados
+     * (409 si no). Validaciones: estudio/clinica existen; si cambia el
+     * estudio se re-cotiza el precio y se chequea duplicado activo de
+     * ese estudio (excepto si mismo); si hay fecha nueva debe ser
+     * futura y con el hueco libre (excepto si mismo). El estado se
+     * recomputa desde los datos presentes y la fila `citas` se
+     * sincroniza (crear/actualizar si CONFIRMADO; si deja de estarlo,
+     * su cita pasa a CANCELADA). Evento tramite.editado con
+     * {accion:"edicion", nota, cambios} canal CALL_CENTER actor ASESOR.
+     */
+    public Tramite editarTramite(UUID tramiteId, Long estudioId, Long clinicaId,
+                                 LocalDateTime fechaCita, String nota, String canal) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEditable(tramite);
+        if (nota == null || nota.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La nota es obligatoria: explica que cambiaste y por que");
+        }
+        List<String> cambios = new ArrayList<>();
+        boolean cambioEstudio = false;
+        if (estudioId != null && !estudioId.equals(tramite.getEstudioId())) {
+            Estudio estudio = estudios.findById(estudioId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Estudio no encontrado: " + estudioId));
+            exigirSinDuplicadoActivo(tramite.getPaciente().getId(), estudioId, tramiteId);
+            cambios.add("estudio: " + nombreEstudioDe(tramite.getEstudioId()) + " → " + estudio.getNombre()
+                    + " ($" + estudio.getPrecio().toPlainString() + ")");
+            tramite.setEstudioId(estudio.getId());
+            tramite.setPrecioCotizado(estudio.getPrecio());
+            cambioEstudio = true;
+        }
+        if (clinicaId != null && !clinicaId.equals(tramite.getClinicaId())) {
+            Clinica clinica = clinicas.findById(clinicaId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Clinica no encontrada: " + clinicaId));
+            cambios.add("clínica: " + nombreClinicaDe(tramite.getClinicaId()) + " → " + clinica.getNombre());
+            tramite.setClinicaId(clinica.getId());
+        }
+        if (fechaCita != null && !fechaCita.equals(tramite.getFechaCita())) {
+            if (tramite.getClinicaId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Elige primero la clinica para poder poner fecha y hora a la cita");
+            }
+            validarFechaCita(fechaCita, tramite.getClinicaId(), tramite.getEstudioId(), tramiteId);
+            String antes = tramite.getFechaCita() == null ? "sin fecha"
+                    : tramite.getFechaCita().format(FORMATO_LATINO_HORA);
+            cambios.add("fecha: " + antes + " → " + fechaCita.format(FORMATO_LATINO_HORA));
+            tramite.setFechaCita(fechaCita);
+        }
+        if (cambios.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "No cambiaste nada: elige otro estudio, otra clinica u otra fecha y hora");
+        }
+        // Si solo cambio el estudio (la fecha se conserva), el nuevo
+        // estudio puede ser mas largo y solaparse con la cita siguiente:
+        // se re-chequea SOLO el solape de la fecha que ya tenia (sin
+        // re-validar pasado/parrilla: esa cita ya estaba confirmada).
+        if (cambioEstudio && tramite.getFechaCita() != null && tramite.getClinicaId() != null
+                && huecoOcupado(tramite.getClinicaId(), tramite.getFechaCita(),
+                        duracionEstudio(tramite.getEstudioId()), tramiteId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Con el estudio nuevo la cita del "
+                            + tramite.getFechaCita().format(FORMATO_LATINO_HORA)
+                            + " se solapa con otra cita de esa clinica. Elige otra fecha y hora.");
+        }
+        tramite.setEstado(recomputarEstado(tramite));
+        tramite = tramites.save(tramite);
+        // Sincronizar la fila `citas` (mismo patron que confirmar /
+        // marcarNoRealizado): CONFIRMADO -> cita CONFIRMADA (se crea
+        // o se actualiza); si ya no esta confirmado, su cita pasa a
+        // CANCELADA para liberar el hueco.
+        if (tramite.getEstado() == EstadoTramite.CONFIRMADO) {
+            Clinica clinica = clinicas.findById(tramite.getClinicaId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Clinica no encontrada"));
+            LocalDateTime fechaFinal = tramite.getFechaCita();
+            Optional<Cita> existente = citas.findByTramiteId(tramiteId);
+            if (existente.isPresent()) {
+                Cita cita = existente.get();
+                cita.setFechaHora(fechaFinal);
+                cita.setClinica(clinica);
+                cita.setEstado("CONFIRMADA");
+                citas.save(cita);
+            } else {
+                citas.save(new Cita(tramite, fechaFinal, clinica, "CONFIRMADA"));
+            }
+        } else {
+            citas.findByTramiteId(tramiteId).ifPresent(cita -> {
+                if ("CONFIRMADA".equals(cita.getEstado())) {
+                    cita.setEstado("CANCELADA");
+                    citas.save(cita);
+                }
+            });
+        }
+        eventos.registrar(tramite.getId(), TipoEvento.TRAMITE_EDITADO, canalReal(canal, tramite), "ASESOR",
+                json(Map.of("accion", "edicion", "nota", nota.trim(),
+                        "cambios", String.join("; ", cambios))));
+        return tramite;
+    }
+
+    /**
+     * Cancela un tramite (asesor): motivo obligatorio (400 si vacio).
+     * Permitido desde cualquier estado no terminal y no eliminado
+     * (409 si no). El estado pasa a CANCELADO (terminal: sale de los
+     * activos y no bloquea un tramite nuevo del mismo estudio) y la
+     * fila `citas` pasa a "CANCELADO": el hueco queda libre porque la
+     * parrilla y huecoOcupado solo cuentan citas CONFIRMADAS.
+     * Evento tramite.cancelado {accion:"cancelacion", motivo} canal
+     * CALL_CENTER actor ASESOR. El historial y el Journey conservan
+     * el folio con su motivo.
+     */
+    public Tramite cancelarTramite(UUID tramiteId, String motivo, String canal) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEditable(tramite);
+        if (motivo == null || motivo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El motivo es obligatorio: apunta por que se cancela el tramite");
+        }
+        tramite.setEstado(EstadoTramite.CANCELADO);
+        tramite = tramites.save(tramite);
+        citas.findByTramiteId(tramiteId).ifPresent(cita -> {
+            cita.setEstado("CANCELADO");
+            citas.save(cita);
+        });
+        eventos.registrar(tramite.getId(), TipoEvento.TRAMITE_CANCELADO, canalReal(canal, tramite), "ASESOR",
+                json(Map.of("accion", "cancelacion", "motivo", motivo.trim())));
+        return tramite;
+    }
+
+    /**
+     * Elimina un tramite (asesor): BORRADO SUAVE, nunca en duro.
+     * Motivo obligatorio (400 si vacio). Pone eliminado=true,
+     * eliminadoMotivo=motivo y estado CANCELADO, y la cita en
+     * "CANCELADO" (mismo efecto de liberar el hueco y salir de
+     * activos que cancelar). El tramite y TODOS sus eventos se
+     * conservan: el folio sale de los listados pero sigue consultable
+     * por folio/id (solo lectura, badge "Eliminado") y su historial
+     * muestra la eliminacion con su motivo. Evento tramite.eliminado
+     * {accion:"eliminacion", motivo} canal CALL_CENTER actor ASESOR.
+     * No confundir con eliminarTramiteVacio (borrado en duro solo de
+     * folios vacios que nunca debieron existir).
+     */
+    public Tramite eliminarTramite(UUID tramiteId, String motivo, String canal) {
+        Tramite tramite = buscar(tramiteId);
+        exigirEditable(tramite);
+        if (motivo == null || motivo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El motivo es obligatorio: apunta por que se elimina el tramite");
+        }
+        tramite.setEliminado(true);
+        tramite.setEliminadoMotivo(motivo.trim());
+        tramite.setEstado(EstadoTramite.CANCELADO);
+        tramite = tramites.save(tramite);
+        citas.findByTramiteId(tramiteId).ifPresent(cita -> {
+            cita.setEstado("CANCELADO");
+            citas.save(cita);
+        });
+        eventos.registrar(tramite.getId(), TipoEvento.TRAMITE_ELIMINADO, canalReal(canal, tramite), "ASESOR",
+                json(Map.of("accion", "eliminacion", "motivo", motivo.trim())));
+        return tramite;
+    }
+
     @Transactional(readOnly = true)
     public Tramite buscar(UUID tramiteId) {
         return tramites.findById(tramiteId)
@@ -708,10 +939,12 @@ public class TramiteService {
         return tramiteComoMapa(buscarPorFolio(folio));
     }
 
-    /** Todos los tramites en un estado dado, para la recepcion de clinica y tableros. */
+    /** Todos los tramites en un estado dado, para la recepcion de clinica y tableros. Los eliminados (borrado suave) no salen: siguen consultables por folio/id. */
     @Transactional(readOnly = true)
     public List<Tramite> listarPorEstado(EstadoTramite estado) {
-        return tramites.findByEstado(estado);
+        return tramites.findByEstado(estado).stream()
+                .filter(t -> !t.isEliminado())
+                .toList();
     }
 
     /**
@@ -723,6 +956,8 @@ public class TramiteService {
     @Transactional(readOnly = true)
     public List<CitaClinicaDTO> listarCitasClinica(EstadoTramite estado) {
         List<Tramite> lista = estado == null ? tramites.findAll() : tramites.findByEstado(estado);
+        // Borrado suave: los eliminados no salen del tablero de clinica.
+        lista = lista.stream().filter(t -> !t.isEliminado()).toList();
         return lista.stream().map(t -> {
             Paciente paciente = t.getPaciente();
             String estudioNombre = t.getEstudioId() == null ? "Sin estudio"
@@ -767,12 +1002,14 @@ public class TramiteService {
 
     @Transactional(readOnly = true)
     public List<Tramite> listarTodos() {
-        return tramites.findAll();
+        // Borrado suave: los eliminados no salen del listado general.
+        return tramites.findAll().stream().filter(t -> !t.isEliminado()).toList();
     }
 
-    /** Estados terminales: el tramite ya se cerro y no vuelve a la lista de activos. */
+    /** Estados terminales: el tramite ya se cerro y no vuelve a la lista de activos. CANCELADO entra aqui: un folio cancelado no bloquea un tramite nuevo del mismo estudio y sale de los activos. */
     public static final List<EstadoTramite> ESTADOS_TERMINALES =
-            List.of(EstadoTramite.ATENDIDO, EstadoTramite.NO_PRESENTADO, EstadoTramite.NO_REALIZADO);
+            List.of(EstadoTramite.ATENDIDO, EstadoTramite.NO_PRESENTADO, EstadoTramite.NO_REALIZADO,
+                    EstadoTramite.CANCELADO);
 
     /**
      * Tramites activos (no terminales) de un paciente, del mas reciente al mas viejo.
@@ -789,13 +1026,19 @@ public class TramiteService {
                         mx.saluddigna.omnicanal.identidad.TelefonoUtil.normalizar(telefono))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Paciente no encontrado con telefono " + telefono));
-        return tramites.findByPacienteIdOrderByCreatedAtDesc(paciente.getId());
+        // Borrado suave: los eliminados no salen del listado.
+        return tramites.findByPacienteIdOrderByCreatedAtDesc(paciente.getId()).stream()
+                .filter(t -> !t.isEliminado())
+                .toList();
     }
 
     /**
      * Trámites de un paciente como mapas planos (mismo formato que
      * buscarPorFolioComoMapa / journey: paciente, estudio y clínica ya
-     * resueltos). Lo usa GET /api/pacientes/{id}/tramites.
+     * resueltos). Lo usa GET /api/pacientes/{id}/tramites. AQUI SI
+     * salen los eliminados (con eliminado=true y su motivo): el asesor
+     * los necesita para el historial del paciente; el front los filtra
+     * de "Folios del paciente" y los muestra aparte como eliminados.
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listarDePacienteComoMapa(UUID pacienteId) {
@@ -850,6 +1093,11 @@ public class TramiteService {
                 "canal", ev.getCanal(),
                 "actor", ev.getActor(),
                 "payload", ev.getPayload(),
+                // Mensaje legible derivado del payload (nota/motivo):
+                // sin esto la nota de una edicion o el motivo de una
+                // cancelacion quedaban escondidos en un JSON que el
+                // front no mostraba (Timeline solo leia ev.mensaje).
+                "mensaje", mensajeDeEvento(ev.getTipo(), ev.getPayload()),
                 "timestamp", ev.getTimestamp() == null ? null : ev.getTimestamp().toString()
         )).toList());
         journey.put("siguientePaso", siguientePaso(tramite.getEstado()));
@@ -863,6 +1111,8 @@ public class TramiteService {
         m.put("id", t.getId().toString());
         m.put("folio", t.getFolio());
         m.put("estado", t.getEstado().name());
+        m.put("eliminado", t.isEliminado());
+        m.put("eliminadoMotivo", t.getEliminadoMotivo());
         m.put("estudioId", t.getEstudioId());
         m.put("clinicaId", t.getClinicaId());
         m.put("precioCotizado", t.getPrecioCotizado());
@@ -918,7 +1168,7 @@ public class TramiteService {
             case CLINICA_SELECCIONADA -> "CONFIRMAR_CITA";
             case CONFIRMADO -> "ACUDIR_A_CITA";
             case ATENDIDO -> "TRAMITE_COMPLETADO";
-            case NO_PRESENTADO, NO_REALIZADO -> "TRAMITE_CERRADO";
+            case NO_PRESENTADO, NO_REALIZADO, CANCELADO -> "TRAMITE_CERRADO";
         };
     }
 
@@ -949,6 +1199,45 @@ public class TramiteService {
         } catch (JsonProcessingException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "datosPendientes con JSON invalido");
         }
+    }
+
+    /**
+     * Mensaje legible de un evento para el timeline del Journey: la
+     * nota de una edicion o el motivo de una cancelacion / eliminacion
+     * / no realizado, sacados del payload. Sin esto esos datos quedaban
+     * escondidos en el JSON del payload y el timeline solo mostraba el
+     * tipo crudo. Null cuando el evento no trae texto que mostrar.
+     */
+    private String mensajeDeEvento(String tipo, String payload) {
+        if (payload == null || payload.isBlank()) return null;
+        Map<String, Object> p;
+        try {
+            p = objectMapper.readValue(payload, new TypeReference<Map<String, Object>>() {
+            });
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+        Object nota = p.get("nota");
+        Object motivo = p.get("motivo");
+        Object cambios = p.get("cambios");
+        Object mensaje = p.get("mensaje");
+        if (TipoEvento.TRAMITE_EDITADO.equals(tipo)) {
+            String texto = "Trámite editado por el asesor."
+                    + (nota != null ? " Nota: " + nota : "")
+                    + (cambios != null ? " Cambios: " + cambios : "");
+            return texto;
+        }
+        if (TipoEvento.TRAMITE_CANCELADO.equals(tipo)) {
+            return "Trámite cancelado por el asesor." + (motivo != null ? " Motivo: " + motivo : "");
+        }
+        if (TipoEvento.TRAMITE_ELIMINADO.equals(tipo)) {
+            return "Trámite eliminado por el asesor." + (motivo != null ? " Motivo: " + motivo : "");
+        }
+        if (TipoEvento.NO_REALIZADO.equals(tipo) && motivo != null) {
+            return "Motivo: " + motivo;
+        }
+        if (mensaje != null) return String.valueOf(mensaje);
+        return null;
     }
 
     private String json(Map<String, String> mapa) {

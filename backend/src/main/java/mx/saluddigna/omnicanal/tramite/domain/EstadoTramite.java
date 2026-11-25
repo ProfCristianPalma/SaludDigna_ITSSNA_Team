@@ -11,5 +11,7 @@ public enum EstadoTramite {
     /** Terminal: el paciente no se presento a su cita confirmada. */
     NO_PRESENTADO,
     /** Terminal: el estudio no se pudo realizar (el doctor apunta el motivo en el log). */
-    NO_REALIZADO
+    NO_REALIZADO,
+    /** Terminal: el asesor cancelo (o elimino) el tramite con un motivo; sale de los activos y libera el hueco. */
+    CANCELADO
 }

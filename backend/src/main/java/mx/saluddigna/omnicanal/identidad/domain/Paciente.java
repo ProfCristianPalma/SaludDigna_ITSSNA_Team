@@ -1,7 +1,7 @@
 package mx.saluddigna.omnicanal.identidad.domain;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Past;
@@ -25,7 +26,6 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "pacientes")
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Paciente {
 
     @Id
@@ -60,6 +60,19 @@ public class Paciente {
     @JsonIgnore
     @Column(name = "password_hash")
     private String passwordHash;
+
+    /**
+     * Contraseña en claro SOLO de entrada (write-only): el asesor la
+     * manda al registrar un paciente (POST /api/pacientes) y
+     * PacienteService.registrar la convierte en hash PBKDF2 y la
+     * descarta; nunca se persiste ni se devuelve en JSON. Sin esto,
+     * el registro por asesor no podia poner contrasena (passwordHash
+     * es @JsonIgnore y no se puede mandar por JSON) y el paciente
+     * creado no podria iniciar sesion con su CURP.
+     */
+    @Transient
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String password;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -135,5 +148,13 @@ public class Paciente {
 
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
     }
 }
