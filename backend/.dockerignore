@@ -1,0 +1,18 @@
+# .dockerignore del backend (contexto de build: ./backend).
+# Docker lo lee desde la raiz del contexto; un .dockerignore en la raiz
+# del repo NO aplica a este servicio.
+# El Dockerfile solo copia pom.xml y src/; nada de lo de abajo lo usa.
+
+# Artefacto de build Maven local: en la PC existe target/ tras
+# 'mvn package' y hoy se enviaria como contexto aunque no se copie.
+# El build de Docker compila de cero con Maven + JDK 21.
+target/
+*.class
+*.jar
+*.war
+*.log
+.idea/
+*.iml
+.vscode/
+.DS_Store
+.env

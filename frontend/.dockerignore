@@ -1,0 +1,25 @@
+# .dockerignore del frontend (contexto de build: ./frontend).
+# Docker lo lee desde la raiz del contexto; un .dockerignore en la raiz
+# del repo NO aplica a este servicio.
+# El Dockerfile solo necesita: package.json, package-lock.json, index.html,
+# vite.config.ts, tsconfig*.json, src/ y nginx.conf. Nada de lo de abajo
+# lo usa el build (verificado: no hay import.meta.env ni VITE_* en src/).
+
+# Dependencias locales (66 MB en esta copia) y salida de build generada:
+# la imagen instala sus propias dependencias y genera su propio dist/.
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Entorno local y archivos de editor
+.env
+.env.*
+!.env.example
+*.local
+.DS_Store
+
+# Logs, cobertura y cache de Vite
+*.log
+coverage/
+.vite/

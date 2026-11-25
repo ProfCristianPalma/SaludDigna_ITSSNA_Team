@@ -1,6 +1,13 @@
 target/
 node_modules/
 dist/
+dist-ssr/
+*.tsbuildinfo
 *.log
+*.local
 .env
+.env.*
+!.env.example
 .DS_Store
+.vite/
+coverage/
