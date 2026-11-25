@@ -116,7 +116,7 @@ export default function WhatsappPage() {
   }
 
   return (
-    <div className="whatsapp-page">
+    <div>
       <h1>WhatsApp — continúa tu trámite</h1>
       <p className="muted">
         El bot te reconoce por tu CURP: escríbela y dime en qué te ayudo. Si tienes varios folios, escribe el folio (por ejemplo SD-2026-0001) o “folio 1” para elegir con cuál seguir. Quien tenga tu CURP puede continuar tu trámite por ti.
@@ -129,7 +129,7 @@ export default function WhatsappPage() {
             <strong>Salud Digna</strong>
             <small>en línea · responde al instante</small>
           </div>
-          {tramite && <EstadoBadge estado={tramite.estado} />}
+          {tramite && <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />}
           {folioActivo && (
             <button
               type="button"
@@ -218,7 +218,7 @@ export default function WhatsappPage() {
         <section className="card" style={{ marginTop: 16 }}>
           <h2>Trámite reconocido</h2>
           <p>
-            Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} />
+            Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
           </p>
           <p>
             {tramite.estudioId ? (
@@ -238,7 +238,7 @@ export default function WhatsappPage() {
             {tramites.map((t) => (
               <li key={t.id} className="dato-row">
                 <span>
-                  <strong>{t.folio}</strong> · {t.estudioId ? <>{t.estudio.nombre} — ${t.precioCotizado} </> : 'sin estudio aún '}<EstadoBadge estado={t.estado} />
+                  <strong>{t.folio}</strong> · {t.estudioId ? <>{t.estudio.nombre} — ${t.precioCotizado} </> : 'sin estudio aún '}<EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
                 </span>
                 <button
                   type="button"

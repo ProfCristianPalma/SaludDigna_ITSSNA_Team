@@ -129,7 +129,7 @@ export default function AppPage() {
                     Folio: <strong>{t.folio}</strong>
                   </p>
                   <p>
-                    <EstadoBadge estado={t.estado} />
+                    <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
                   </p>
                   <p>
                     Precio: <strong>${t.precioCotizado}</strong>

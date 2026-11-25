@@ -1006,7 +1006,7 @@ public class CanalController {
             String estudio = t.getEstudioId() == null ? "sin estudio aún"
                     : estudios.findById(t.getEstudioId()).map(Estudio::getNombre).orElse("estudio");
             sb.append(i + 1).append(") ").append(t.getFolio()).append(" — ").append(estudio)
-                    .append(" (").append(t.getEstado().name()).append(")\n");
+                    .append(" (").append(etiquetaEstado(t)).append(")\n");
         }
         sb.append("Responde con el folio (por ejemplo ").append(activos.get(0).getFolio())
                 .append("), con 'folio 1', 'folio 2', etc., o con 'primer folio', 'segundo', etc.");
@@ -1443,7 +1443,7 @@ public class CanalController {
         StringBuilder sb = new StringBuilder();
         sb.append("Tu trámite ").append(tramite.getFolio()).append(" (").append(nombreEstudio(tramite));
         if (tramite.getPrecioCotizado() != null) sb.append(" $").append(tramite.getPrecioCotizado());
-        sb.append(") está en estado ").append(tramite.getEstado().name()).append(": ");
+        sb.append("): ");
         sb.append(descripcionEstado(tramite));
         sb.append(".");
         return sb.toString();
@@ -1455,7 +1455,7 @@ public class CanalController {
             case INICIADO -> "aún no tiene estudio elegido";
             case DATOS_PENDIENTES -> "le faltan datos por completar";
             case COTIZADO -> "ya está cotizado, falta elegir clínica";
-            case CLINICA_SELECCIONADA -> "clínica " + nombreClinica(tramite) + ", falta confirmar la fecha";
+            case CLINICA_SELECCIONADA -> nombreClinica(tramite) + ", falta confirmar la fecha";
             case CONFIRMADO -> "cita el "
                     + (tramite.getFechaCita() == null ? "sin fecha" : tramite.getFechaCita().format(FORMATO_LATINO_HORA))
                     + " en " + nombreClinica(tramite);
@@ -1468,10 +1468,12 @@ public class CanalController {
     /** Confirmación de que se seleccionó un folio: nunca un "No entendí". */
     private ResultadoBot confirmacionSeleccion(Paciente paciente, Tramite tramite) {
         List<String> opciones = opcionesPara(tramite);
+        String desc = descripcionEstado(tramite);
+        desc = Character.toUpperCase(desc.charAt(0)) + desc.substring(1);
         String resp = "Perfecto, seguimos con tu trámite " + tramite.getFolio()
                 + " (" + nombreEstudio(tramite)
                 + (tramite.getPrecioCotizado() != null ? " $" + tramite.getPrecioCotizado() : "") + "). "
-                + "Está en estado " + tramite.getEstado().name() + ": " + descripcionEstado(tramite)
+                + desc
                 + "\nAhora puedes:\n" + listarOpcionesNumeradas(opciones);
         return new ResultadoBot(resp, true, opciones, tramite);
     }
@@ -1484,6 +1486,16 @@ public class CanalController {
     private String nombreClinica(Tramite tramite) {
         if (tramite.getClinicaId() == null) return "sin clínica";
         return clinicas.findById(tramite.getClinicaId()).map(Clinica::getNombre).orElse("clínica");
+    }
+
+    /**
+     * Etiqueta legible del estado de un trámite para mostrarle al
+     * usuario: nunca el nombre técnico del enum. Con clínica elegida
+     * se muestra el nombre de la clínica.
+     */
+    private String etiquetaEstado(Tramite t) {
+        return TramiteService.etiquetaEstado(t.getEstado(),
+                t.getClinicaId() == null ? null : nombreClinica(t));
     }
 
     /** Respuestas sugeridas para el estado actual: el front las muestra como botones. */
@@ -1645,7 +1657,7 @@ public class CanalController {
         for (int i = 0; i < activos.size(); i++) {
             Tramite t = activos.get(i);
             sb.append(i + 1).append(") ").append(t.getFolio()).append(" — ").append(nombreEstudio(t))
-                    .append(" (").append(t.getEstado().name()).append("): ").append(descripcionCortaRetomar(t)).append("\n");
+                    .append(" (").append(etiquetaEstado(t)).append("): ").append(descripcionCortaRetomar(t)).append("\n");
         }
         sb.append("¿Con cuál seguimos? Responde con el folio, por ejemplo ").append(activos.get(0).getFolio()).append(".");
         Map<String, Object> respuesta = respuestaSinTramite(sb.toString(), "ELEGIR_FOLIO", true, foliosComoOpciones(activos));

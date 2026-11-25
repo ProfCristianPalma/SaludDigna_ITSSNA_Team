@@ -24,6 +24,12 @@ const CLASSES: Record<EstadoTramite, string> = {
   CANCELADO: 'badge badge-danger',
 };
 
-export default function EstadoBadge({ estado }: { estado: EstadoTramite }) {
-  return <span className={CLASSES[estado]}>{LABELS[estado]}</span>;
+/**
+ * Insignia legible del estado de un trámite: nunca el nombre técnico
+ * del enum. Con clínica elegida se muestra el NOMBRE de la clínica
+ * (o "Clínica seleccionada" si no se pasa ninguna).
+ */
+export default function EstadoBadge({ estado, clinica }: { estado: EstadoTramite; clinica?: string | null }) {
+  const label = estado === 'CLINICA_SELECCIONADA' && clinica ? clinica : LABELS[estado];
+  return <span className={CLASSES[estado]}>{label}</span>;
 }

@@ -378,7 +378,7 @@ export default function WebPage() {
           {tramite && (
             <div>
               <p>
-                Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} />
+                Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
               </p>
               <p>
                 Estudio: {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
@@ -479,7 +479,7 @@ export default function WebPage() {
               <li key={t.id} className="dato-row">
                 <span>
                   <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado}{' '}
-                  <EstadoBadge estado={t.estado} />
+                  <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
                   {t.clinica ? ` · ${t.clinica.nombre}` : ''}
                   {t.fechaCita ? ` · Cita: ${formatearFechaHora(t.fechaCita)}` : ''}
                 </span>

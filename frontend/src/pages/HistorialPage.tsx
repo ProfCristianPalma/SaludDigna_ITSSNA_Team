@@ -158,7 +158,7 @@ export default function HistorialPage() {
         return (
           <section key={t.id} className="card" style={{ marginBottom: 12 }}>
             <p>
-              Folio: <strong>{t.folio}</strong> <EstadoBadge estado={t.estado} />
+              Folio: <strong>{t.folio}</strong> <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
             </p>
             <h2>{t.estudio.nombre}</h2>
             <dl className="kv">

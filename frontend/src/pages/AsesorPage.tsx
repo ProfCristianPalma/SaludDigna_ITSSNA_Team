@@ -424,7 +424,7 @@ function ContenidoAsesor() {
             {tramites.map((t) => (
               <li key={t.id} className="dato-row">
                 <span>
-                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
+                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
                 </span>
                 <button type="button" className="btn btn-small" onClick={() => void cargarTramite(t)}>
                   Ver
@@ -440,7 +440,7 @@ function ContenidoAsesor() {
           <section className="card">
             <h2>Contexto acumulado</h2>
             <p>
-              Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} />
+              Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
             </p>
             <dl className="kv">
               <dt>Paciente</dt><dd>{tramite.paciente?.nombre ?? '—'}</dd>
@@ -589,7 +589,7 @@ function ContenidoAsesor() {
             {resTramite && (
               <>
                 <p>
-                  Folio: <strong>{resTramite.folio}</strong> <EstadoBadge estado={resTramite.estado} /> ·{' '}
+                  Folio: <strong>{resTramite.folio}</strong> <EstadoBadge estado={resTramite.estado} clinica={resTramite.clinica?.nombre} /> ·{' '}
                   {resTramite.estudio.nombre} — <strong>${resTramite.precioCotizado}</strong>
                 </p>
                 <h3>2 · Clínica</h3>

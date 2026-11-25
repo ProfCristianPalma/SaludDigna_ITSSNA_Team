@@ -145,7 +145,7 @@ function ContenidoDoctor() {
             <article key={c.tramiteId} className="card">
               <p>
                 Folio: <strong>{c.folio}</strong>{' '}
-                <EstadoBadge estado={c.estado as EstadoTramite} />
+                <EstadoBadge estado={c.estado as EstadoTramite} clinica={c.clinicaNombre} />
               </p>
               <h2>{c.estudioNombre}</h2>
               <dl className="kv">

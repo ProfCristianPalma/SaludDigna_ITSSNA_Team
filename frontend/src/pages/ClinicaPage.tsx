@@ -151,7 +151,7 @@ function ContenidoClinica() {
         {visibles.map((c) => (
           <article key={c.tramiteId} className="card">
             <p>
-              Folio: <strong>{c.folio}</strong> <EstadoBadge estado={c.estado as EstadoTramite} />
+              Folio: <strong>{c.folio}</strong> <EstadoBadge estado={c.estado as EstadoTramite} clinica={c.clinicaNombre} />
             </p>
             <h2>{c.estudioNombre}</h2>
             <dl className="kv">

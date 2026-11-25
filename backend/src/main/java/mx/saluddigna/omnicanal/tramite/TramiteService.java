@@ -121,6 +121,26 @@ public class TramiteService {
     private static final DateTimeFormatter FORMATO_LATINO_HORA = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
     /**
+     * Etiqueta legible de un estado para mostrarle al usuario: nunca el
+     * nombre técnico del enum (INICIADO, CLINICA_SELECCIONADA, ...).
+     * Para CLINICA_SELECCIONADA se muestra el nombre de la clínica
+     * elegida (o "Clínica elegida" si el trámite no la trae).
+     */
+    public static String etiquetaEstado(EstadoTramite estado, String clinicaNombre) {
+        return switch (estado) {
+            case INICIADO -> "Iniciado";
+            case DATOS_PENDIENTES -> "Datos pendientes";
+            case COTIZADO -> "Cotizado";
+            case CLINICA_SELECCIONADA -> clinicaNombre != null && !clinicaNombre.isBlank()
+                    ? clinicaNombre : "Clínica elegida";
+            case CONFIRMADO -> "Cita confirmada";
+            case ATENDIDO -> "Atendido";
+            case NO_PRESENTADO -> "No se presentó";
+            case NO_REALIZADO -> "No se pudo realizar";
+        };
+    }
+
+    /**
      * Resumen para retomar un trámite activo. Lo comparten el 409 de
      * duplicado (Web/Asesor) y el bot de WhatsApp, así el mensaje es el
      * mismo en todos los canales: folio, estado, estudio, costo,
@@ -138,6 +158,13 @@ public class TramiteService {
                 : clinicas.findById(t.getClinicaId()).map(Clinica::getNombre).orElse(null);
         List<String> faltan = faltantes(t);
         boolean yaAgendada = t.getEstado() == EstadoTramite.CONFIRMADO;
+        // Descripción legible del estado para el mensaje: nunca el
+        // nombre técnico del enum. Con clínica elegida se dice el
+        // nombre de la clínica ("clínica: Clínica Salud Digna
+        // Tehuacán"), no "CLINICA_SELECCIONADA".
+        String descripcionEstado = t.getEstado() == EstadoTramite.CLINICA_SELECCIONADA
+                ? "clínica: " + (clinicaNombre == null ? "Clínica elegida" : clinicaNombre)
+                : etiquetaEstado(t.getEstado(), clinicaNombre);
         String mensaje;
         if (yaAgendada) {
             mensaje = "Ya está agendada tu cita de " + estudioNombre
@@ -146,17 +173,18 @@ public class TramiteService {
                     + ", el " + (t.getFechaCita() == null ? "sin fecha" : t.getFechaCita().format(FORMATO_LATINO_HORA))
                     + ". Tu folio es " + t.getFolio() + ". No necesitas hacer nada más; te esperamos en la clínica.";
         } else if (t.getEstudioId() == null) {
-            mensaje = "Ya tienes un trámite activo (folio " + t.getFolio() + ", " + t.getEstado().name()
+            mensaje = "Ya tienes un trámite activo (folio " + t.getFolio() + ", " + descripcionEstado
                     + ") y aún no tiene estudio elegido. ¿Quieres retomarlo?";
         } else {
             mensaje = "Ya tienes un trámite activo de " + estudioNombre + " (folio " + t.getFolio()
-                    + ", " + t.getEstado().name() + "). ¿Quieres retomarlo?";
+                    + ", " + descripcionEstado + "). ¿Quieres retomarlo?";
         }
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("tramiteExistente", Boolean.TRUE);
         r.put("tramiteId", t.getId().toString());
         r.put("folio", t.getFolio());
         r.put("estado", t.getEstado().name());
+        r.put("estadoEtiqueta", etiquetaEstado(t.getEstado(), clinicaNombre));
         r.put("estudio", estudioNombre);
         r.put("precio", t.getPrecioCotizado() == null ? null : t.getPrecioCotizado().toPlainString());
         r.put("clinica", clinicaNombre);

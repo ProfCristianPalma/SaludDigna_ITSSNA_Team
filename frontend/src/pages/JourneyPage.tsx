@@ -186,7 +186,7 @@ export default function JourneyPage() {
             {folios.map((t) => (
               <li key={t.id} className="dato-row">
                 <span>
-                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} />
+                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
                 </span>
                 <button type="button" className="btn btn-small" onClick={() => void cargarJourney(t.folio)}>
                   Ver Journey
@@ -206,7 +206,7 @@ export default function JourneyPage() {
         <div style={{ marginTop: 16 }}>
           <section className="card">
             <p>
-              Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} />
+              Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
             </p>
             <p>
               {tramite.paciente?.nombre} · {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
@@ -218,7 +218,7 @@ export default function JourneyPage() {
               {PASOS.map((paso, i) => (
                 <li key={paso} className={i <= indiceActual ? 'step step-done' : 'step'}>
                   <span className="step-dot" aria-hidden="true">{i < indiceActual ? '✓' : i + 1}</span>
-                  <span>{PASO_LABEL[paso]}</span>
+                  <span>{paso === 'CLINICA_SELECCIONADA' && tramite?.clinica ? tramite.clinica.nombre : PASO_LABEL[paso]}</span>
                 </li>
               ))}
             </ol>

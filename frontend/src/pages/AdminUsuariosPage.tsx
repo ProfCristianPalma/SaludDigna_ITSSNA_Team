@@ -17,6 +17,7 @@ import {
   restablecerPasswordPaciente,
 } from '../api';
 import PasswordInput from '../components/PasswordInput';
+import EstadoBadge from '../components/EstadoBadge';
 import type { StaffAdmin, StaffAdminInput, UsuarioAdmin, UsuarioAdminInput } from '../api';
 import type { Tramite } from '../types';
 import { esFechaLatinaValida, formatearFecha, parsearFechaLatina } from '../fechas';
@@ -516,7 +517,7 @@ function ContenidoAdminUsuarios() {
           <dl className="kv">
             <dt>Paciente</dt><dd>{tramiteFolio.paciente?.nombre ?? '—'} · {tramiteFolio.paciente?.curp ?? tramiteFolio.paciente?.telefono ?? '—'}</dd>
             <dt>Estudio</dt><dd>{tramiteFolio.estudio.nombre}</dd>
-            <dt>Estado</dt><dd>{tramiteFolio.estado}</dd>
+            <dt>Estado</dt><dd><EstadoBadge estado={tramiteFolio.estado} clinica={tramiteFolio.clinica?.nombre} /></dd>
             <dt>Fecha de cita</dt><dd>{tramiteFolio.fechaCita ? formatearFecha(tramiteFolio.fechaCita) : 'Sin confirmar'}</dd>
             <dt>Clínica</dt><dd>{tramiteFolio.clinica ? `${tramiteFolio.clinica.nombre} (${tramiteFolio.clinica.ciudad})` : 'Sin seleccionar'}</dd>
           </dl>

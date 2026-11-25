@@ -112,7 +112,7 @@ export default function RetomarTramite() {
               <li key={t.id} className="dato-row">
                 <span>
                   <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado}{' '}
-                  <EstadoBadge estado={t.estado} />
+                  <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
                   {t.clinica ? ` · ${t.clinica.nombre}` : ''}
                   {t.fechaCita ? ` · Cita: ${formatearFechaHora(t.fechaCita)}` : ''}
                   <br />
