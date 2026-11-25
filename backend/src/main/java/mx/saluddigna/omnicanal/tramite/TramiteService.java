@@ -939,6 +939,27 @@ public class TramiteService {
         return tramiteComoMapa(buscarPorFolio(folio));
     }
 
+    /**
+     * Mapa plano de un trámite por id, para que el controlador no devuelva la entidad JPA cruda:
+     * `Tramite.paciente` es LAZY y Jackson intentaba serializar el proxy de Hibernate
+     * (`hibernateLazyInitializer`, un ByteBuddyInterceptor) → HTTP 500 en el Asesor al confirmar
+     * (y en Nueva reservación al crear/cotizar). Mismo patrón que `buscarPorFolioComoMapa`:
+     * el front ya normaliza este mapa (`normalizeTramite`).
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> tramiteComoMapaPorId(UUID id) {
+        return tramiteComoMapa(buscar(id));
+    }
+
+    /** Listado como mapas planos (mismo criterio que el `listar` del controlador). */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listarComoMapa(String telefono, EstadoTramite estado) {
+        List<Tramite> tramites = estado != null ? listarPorEstado(estado)
+                : telefono != null && !telefono.isBlank() ? listarPorTelefono(telefono)
+                : listarTodos();
+        return tramites.stream().map(this::tramiteComoMapa).toList();
+    }
+
     /** Todos los tramites en un estado dado, para la recepcion de clinica y tableros. Los eliminados (borrado suave) no salen: siguen consultables por folio/id. */
     @Transactional(readOnly = true)
     public List<Tramite> listarPorEstado(EstadoTramite estado) {

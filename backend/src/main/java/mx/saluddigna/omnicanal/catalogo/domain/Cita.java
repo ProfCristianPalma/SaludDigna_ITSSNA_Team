@@ -1,5 +1,6 @@
 package mx.saluddigna.omnicanal.catalogo.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -16,6 +17,7 @@ import mx.saluddigna.omnicanal.tramite.domain.Tramite;
 
 @Entity
 @Table(name = "citas")
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
 public class Cita {
 
     @Id

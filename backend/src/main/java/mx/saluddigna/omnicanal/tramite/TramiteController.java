@@ -82,24 +82,29 @@ public class TramiteController {
     public record RegistrarEventoRequest(String tipo, String canal, String actor, String payload) {
     }
 
+    // NOTA 2026-11-25 (lote 37): ningún endpoint de este controlador devuelve la entidad JPA cruda.
+    // `Tramite.paciente` es LAZY y Jackson intentaba serializar el proxy de Hibernate
+    // (`hibernateLazyInitializer`, un ByteBuddyInterceptor) → HTTP 500 en el Asesor al confirmar
+    // y en Nueva reservación al crear/cotizar. Se devuelve el mapa plano de `tramiteComoMapaPorId`
+    // (mismo formato que /tramites/folio/{folio} y el Journey); el front ya lo normaliza.
     @PostMapping("/tramites")
-    public ResponseEntity<Tramite> crear(@Valid @RequestBody CrearTramiteRequest req) {
+    public ResponseEntity<Map<String, Object>> crear(@Valid @RequestBody CrearTramiteRequest req) {
+        Tramite creado;
         if (req.pacienteId() != null) {
-            return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(service.crearTramite(req.pacienteId(), req.estudioId(), req.canalOrigen()));
+            creado = service.crearTramite(req.pacienteId(), req.estudioId(), req.canalOrigen());
+        } else if (req.curp() != null && !req.curp().isBlank()) {
+            creado = service.crearTramitePorCurp(req.curp(), req.nombre(), req.telefono(),
+                    req.estudioId(), req.canalOrigen());
+        } else {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "pacienteId o curp es obligatorio para crear el trámite");
         }
-        if (req.curp() != null && !req.curp().isBlank()) {
-            return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(service.crearTramitePorCurp(req.curp(), req.nombre(), req.telefono(),
-                            req.estudioId(), req.canalOrigen()));
-        }
-        throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "pacienteId o curp es obligatorio para crear el trámite");
+        return ResponseEntity.status(HttpStatus.CREATED).body(service.tramiteComoMapaPorId(creado.getId()));
     }
 
     @GetMapping("/tramites/{id}")
-    public Tramite buscar(@PathVariable UUID id) {
-        return service.buscar(id);
+    public Map<String, Object> buscar(@PathVariable UUID id) {
+        return service.tramiteComoMapaPorId(id);
     }
 
     /**
@@ -108,9 +113,10 @@ public class TramiteController {
      * o eliminado. El estado se recomputa y la cita se sincroniza.
      */
     @PutMapping("/tramites/{id}")
-    public Tramite editar(@PathVariable UUID id, @RequestBody EditarTramiteRequest req) {
+    public Map<String, Object> editar(@PathVariable UUID id, @RequestBody EditarTramiteRequest req) {
         String canal = req.canal() == null || req.canal().isBlank() ? "CALL_CENTER" : req.canal();
-        return service.editarTramite(id, req.estudioId(), req.clinicaId(), req.fechaCita(), req.nota(), canal);
+        service.editarTramite(id, req.estudioId(), req.clinicaId(), req.fechaCita(), req.nota(), canal);
+        return service.tramiteComoMapaPorId(id);
     }
 
     /**
@@ -119,9 +125,10 @@ public class TramiteController {
      * hueco queda libre) y evento tramite.cancelado en el log.
      */
     @PostMapping("/tramites/{id}/cancelar")
-    public Tramite cancelar(@PathVariable UUID id, @RequestBody CancelarTramiteRequest req) {
+    public Map<String, Object> cancelar(@PathVariable UUID id, @RequestBody CancelarTramiteRequest req) {
         String canal = req == null || req.canal() == null || req.canal().isBlank() ? "CALL_CENTER" : req.canal();
-        return service.cancelarTramite(id, req == null ? null : req.motivo(), canal);
+        service.cancelarTramite(id, req == null ? null : req.motivo(), canal);
+        return service.tramiteComoMapaPorId(id);
     }
 
     /**
@@ -131,9 +138,10 @@ public class TramiteController {
      * intactos y consultables por folio (solo lectura).
      */
     @PostMapping("/tramites/{id}/eliminar")
-    public Tramite eliminar(@PathVariable UUID id, @RequestBody EliminarTramiteRequest req) {
+    public Map<String, Object> eliminar(@PathVariable UUID id, @RequestBody EliminarTramiteRequest req) {
         String canal = req == null || req.canal() == null || req.canal().isBlank() ? "CALL_CENTER" : req.canal();
-        return service.eliminarTramite(id, req == null ? null : req.motivo(), canal);
+        service.eliminarTramite(id, req == null ? null : req.motivo(), canal);
+        return service.tramiteComoMapaPorId(id);
     }
 
     /** Trámite por folio legible, ej. SD-2026-0001 (el {id} de arriba solo acepta UUID).
@@ -240,16 +248,10 @@ public class TramiteController {
      * GET /api/tramites (sin params) → todos.
      */
     @GetMapping("/tramites")
-    public List<Tramite> listar(
+    public List<Map<String, Object>> listar(
             @RequestParam(required = false) String telefono,
             @RequestParam(required = false) mx.saluddigna.omnicanal.tramite.domain.EstadoTramite estado) {
-        if (estado != null) {
-            return service.listarPorEstado(estado);
-        }
-        if (telefono != null && !telefono.isBlank()) {
-            return service.listarPorTelefono(telefono);
-        }
-        return service.listarTodos();
+        return service.listarComoMapa(telefono, estado);
     }
 
     /** Registro manual de un evento sobre un tramite (append-only, no cambia el estado por si solo). */
@@ -264,24 +266,28 @@ public class TramiteController {
     }
 
     @PostMapping("/tramites/{id}/cotizar")
-    public Tramite cotizar(@PathVariable UUID id, @Valid @RequestBody CotizarRequest req) {
-        return service.cotizar(id, req.estudioId(), req.canal());
+    public Map<String, Object> cotizar(@PathVariable UUID id, @Valid @RequestBody CotizarRequest req) {
+        service.cotizar(id, req.estudioId(), req.canal());
+        return service.tramiteComoMapaPorId(id);
     }
 
     @PostMapping("/tramites/{id}/seleccionar-clinica")
-    public Tramite seleccionarClinica(@PathVariable UUID id, @Valid @RequestBody SeleccionarClinicaRequest req) {
-        return service.seleccionarClinica(id, req.clinicaId(), req.canal());
+    public Map<String, Object> seleccionarClinica(@PathVariable UUID id, @Valid @RequestBody SeleccionarClinicaRequest req) {
+        service.seleccionarClinica(id, req.clinicaId(), req.canal());
+        return service.tramiteComoMapaPorId(id);
     }
 
     @PostMapping("/tramites/{id}/confirmar")
-    public Tramite confirmar(@PathVariable UUID id, @Valid @RequestBody ConfirmarRequest req) {
-        return service.confirmar(id, req.fechaCita(), req.canal());
+    public Map<String, Object> confirmar(@PathVariable UUID id, @Valid @RequestBody ConfirmarRequest req) {
+        service.confirmar(id, req.fechaCita(), req.canal());
+        return service.tramiteComoMapaPorId(id);
     }
 
     /** Clínica: marca la atención como concluida (CONFIRMADO → ATENDIDO) y actualiza la cita. */
     @PostMapping("/tramites/{id}/atender")
-    public Tramite atender(@PathVariable UUID id) {
-        return service.concluirAtencion(id);
+    public Map<String, Object> atender(@PathVariable UUID id) {
+        service.concluirAtencion(id);
+        return service.tramiteComoMapaPorId(id);
     }
 
     public record MotivoRequest(String motivo) {
@@ -289,25 +295,29 @@ public class TramiteController {
 
     /** Doctor: registra el check-in del paciente (CONFIRMADO, sin cambiar el estado). */
     @PostMapping("/tramites/{id}/check-in")
-    public Tramite checkIn(@PathVariable UUID id) {
-        return service.registrarCheckIn(id);
+    public Map<String, Object> checkIn(@PathVariable UUID id) {
+        service.registrarCheckIn(id);
+        return service.tramiteComoMapaPorId(id);
     }
 
     /** Doctor: el paciente no se presentó a su cita (CONFIRMADO → NO_PRESENTADO, terminal). */
     @PostMapping("/tramites/{id}/no-presentado")
-    public Tramite noPresentado(@PathVariable UUID id) {
-        return service.marcarNoPresentado(id);
+    public Map<String, Object> noPresentado(@PathVariable UUID id) {
+        service.marcarNoPresentado(id);
+        return service.tramiteComoMapaPorId(id);
     }
 
     /** Doctor: el estudio no se pudo realizar (CONFIRMADO → NO_REALIZADO, terminal). El motivo es obligatorio. */
     @PostMapping("/tramites/{id}/no-realizado")
-    public Tramite noRealizado(@PathVariable UUID id, @RequestBody MotivoRequest req) {
-        return service.marcarNoRealizado(id, req == null ? null : req.motivo());
+    public Map<String, Object> noRealizado(@PathVariable UUID id, @RequestBody MotivoRequest req) {
+        service.marcarNoRealizado(id, req == null ? null : req.motivo());
+        return service.tramiteComoMapaPorId(id);
     }
 
     @PostMapping("/tramites/{id}/completar-dato")
-    public Tramite completarDato(@PathVariable UUID id, @RequestBody CompletarDatoRequest req) {
-        return service.completarDatoPendiente(id, req.clave(), req.valor(), req.canal());
+    public Map<String, Object> completarDato(@PathVariable UUID id, @RequestBody CompletarDatoRequest req) {
+        service.completarDatoPendiente(id, req.clave(), req.valor(), req.canal());
+        return service.tramiteComoMapaPorId(id);
     }
 
     @GetMapping("/tramites/{id}/timeline")

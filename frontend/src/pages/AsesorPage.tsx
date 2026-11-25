@@ -83,6 +83,12 @@ function ContenidoAsesor() {
   // solo lectura es la que se abre por defecto desde "Ver" en la lista.
   const [panelAccion, setPanelAccion] = useState<'ver' | 'editar-paciente' | 'editar-reservacion' | 'cierre' | 'continuar'>('ver');
 
+  // Acordeón de las tres secciones iniciales (Buscar trámite / Nueva reservación /
+  // Registrar nuevo paciente): solo una abierta a la vez; las otras dos colapsan a su
+  // encabezado y se reabren pulsándolo. Las secciones de resultados (Folios del paciente,
+  // detalle, historial) no entran en el acordeón. null = las tres colapsadas.
+  const [seccionAbierta, setSeccionAbierta] = useState<'buscar' | 'reserva' | 'registro' | null>('buscar');
+
   // Editar datos del paciente del trámite en pantalla (PUT
   // /api/pacientes/{id}). Sin campo de contraseña: aquí no se toca.
   const [editNombre, setEditNombre] = useState('');
@@ -525,6 +531,9 @@ function ContenidoAsesor() {
 
   /** Carga un folio del contexto acumulado en el flujo de reservación (retomar con lo que falta). */
   function usarFolioEnReserva(t: Tramite) {
+    // El folio se trabaja en la sección Nueva reservación: se abre
+    // sola si estaba colapsada en el acordeón.
+    setSeccionAbierta('reserva');
     setResTramite(t);
     setResEstudioId(t.estudioId ?? '');
     setResClinicaId(t.clinica?.id ?? '');
@@ -540,6 +549,9 @@ function ContenidoAsesor() {
 
   function usarPacienteDelTramite() {
     if (!tramite?.paciente) return;
+    // El paciente se usa en la sección Nueva reservación: se abre
+    // sola si estaba colapsada en el acordeón.
+    setSeccionAbierta('reserva');
     setResPaciente(tramite.paciente);
     setResIdentificador(tramite.paciente.curp ?? '');
     setResMensaje(`Usando al paciente del trámite ${tramite.folio}: ${tramite.paciente.nombre}.`);
@@ -806,17 +818,32 @@ function ContenidoAsesor() {
       <h1>Call Center — consola del asesor</h1>
       <p className="muted">Busca por CURP, teléfono, folio o nombre y ve todo el contexto acumulado: el paciente nunca repite su historia.</p>
 
-      <form className="card form-inline" onSubmit={handleBuscar}>
-        <input
-          value={busqueda}
-          onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="CURP, teléfono, folio (ej. SD-2026-0001) o nombre"
-          aria-label="CURP, teléfono, folio o nombre"
-        />
-        <button type="submit" className="btn btn-primary" disabled={buscando}>
-          {buscando ? 'Buscando…' : 'Buscar trámite'}
-        </button>
-      </form>
+      <section className="card" style={{ marginTop: 16 }}>
+        <div className="actions" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 0 }}>
+          <h2 style={{ margin: 0 }}>Buscar trámite</h2>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setSeccionAbierta(seccionAbierta === 'buscar' ? null : 'buscar')}
+            aria-expanded={seccionAbierta === 'buscar'}
+          >
+            {seccionAbierta === 'buscar' ? 'Ocultar' : 'Mostrar'}
+          </button>
+        </div>
+        {seccionAbierta === 'buscar' && (
+          <form className="form-inline" onSubmit={handleBuscar} style={{ marginTop: 12 }}>
+            <input
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="CURP, teléfono, folio (ej. SD-2026-0001) o nombre"
+              aria-label="CURP, teléfono, folio o nombre"
+            />
+            <button type="submit" className="btn btn-primary" disabled={buscando}>
+              {buscando ? 'Buscando…' : 'Buscar trámite'}
+            </button>
+          </form>
+        )}
+      </section>
 
       {mensaje && <p className="notice" role="status">{mensaje}</p>}
 
@@ -1108,7 +1135,6 @@ function ContenidoAsesor() {
                 <h3>Continuar proceso</h3>
                 <p className="muted">
                   Continúa con lo que falta de este folio ({textoFaltantes(faltantesDe(tramite))}), con canal Call Center.
-                  Sin nota: solo se guardan los pasos que completes.
                 </p>
                 {resMensaje && <p className="notice" role="status">{resMensaje}</p>}
                 {resTramite && resTramite.id === tramite.id && (
@@ -1232,13 +1258,25 @@ function ContenidoAsesor() {
       )}
 
       <section className="card" id="nueva-reservacion" style={{ marginTop: 16 }}>
-        <h2>Nueva reservación</h2>
-        <p className="muted">
-          Busca al paciente por CURP, teléfono, folio o nombre (sin pedir teléfono al crear la reservación):
-          elige al paciente, luego el estudio, la clínica y la fecha y hora de la cita.
-        </p>
+        <div className="actions" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 0 }}>
+          <h2 style={{ margin: 0 }}>Nueva reservación</h2>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setSeccionAbierta(seccionAbierta === 'reserva' ? null : 'reserva')}
+            aria-expanded={seccionAbierta === 'reserva'}
+          >
+            {seccionAbierta === 'reserva' ? 'Ocultar' : 'Mostrar'}
+          </button>
+        </div>
+        {seccionAbierta === 'reserva' && (
+          <>
+            <p className="muted">
+              Busca al paciente por CURP, teléfono, folio o nombre (sin pedir teléfono al crear la reservación):
+              elige al paciente, luego el estudio, la clínica y la fecha y hora de la cita.
+            </p>
 
-        <h3>Paciente</h3>
+            <h3>Paciente</h3>
         <form className="form-inline" onSubmit={handleBuscarPacienteReserva}>
           <input
             value={resIdentificador}
@@ -1403,11 +1441,25 @@ function ContenidoAsesor() {
             )}
           </>
         )}
+          </>
+        )}
       </section>
 
       <section className="card" style={{ marginTop: 16 }}>
-        <h2>Registrar nuevo paciente</h2>
-        <p className="muted">
+        <div className="actions" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 0 }}>
+          <h2 style={{ margin: 0 }}>Registrar nuevo paciente</h2>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setSeccionAbierta(seccionAbierta === 'registro' ? null : 'registro')}
+            aria-expanded={seccionAbierta === 'registro'}
+          >
+            {seccionAbierta === 'registro' ? 'Ocultar' : 'Mostrar'}
+          </button>
+        </div>
+        {seccionAbierta === 'registro' && (
+          <>
+            <p className="muted">
           Registra al paciente para que pueda iniciar sesión con su CURP y la contraseña que le des.
           Solo el teléfono y el correo son opcionales; el resto es obligatorio. Tu sesión de asesor no se toca.
         </p>
@@ -1482,6 +1534,8 @@ function ContenidoAsesor() {
             </a>
           </div>
         </form>
+          </>
+        )}
       </section>
     </div>
   );
