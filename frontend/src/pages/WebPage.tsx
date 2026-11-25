@@ -4,10 +4,14 @@ import { buscarPacientePorCurp, confirmar, cotizar, crearTramite, getClinicas, g
 import { esCurp, normalizarCurp, validarCurp } from '../curp';
 import { esFechaLatinaValida, formatearFecha, formatearFechaHora, parsearFechaLatina } from '../fechas';
 import type { Clinica, Estudio, Paciente, Tramite } from '../types';
+import { siguientePaso } from '../types';
 import EstadoBadge from '../components/EstadoBadge';
 import ParrillaHorarios from '../components/ParrillaHorarios';
 
 const FOLIO_KEY = 'saluddigna-folio';
+
+/** Estados con pasos pendientes por terminar: solo esos llevan botón "Continuar" en Mis folios (CONFIRMADO y terminales, no). */
+const ESTADOS_PENDIENTES: Tramite['estado'][] = ['INICIADO', 'DATOS_PENDIENTES', 'COTIZADO', 'CLINICA_SELECCIONADA'];
 
 export default function WebPage() {
   // Sin sesión, el formulario arranca VACÍO: ya no hay ningún usuario
@@ -114,6 +118,16 @@ export default function WebPage() {
   // la del trámite. Así el calendario y la parrilla aparecen en cuanto
   // se elige estudio y clínica, sin obligar a pulsar "Seleccionar clínica".
   const clinicaEfectivaId = clinicaId || tramite?.clinica?.id || '';
+
+  // Clínica ya elegida: si el folio trae clínica (por cualquier canal),
+  // el desplegable queda bloqueado y la clínica se muestra solo como
+  // texto. No hay botón de "cambiar clínica": lo pedido es bloquear.
+  // El estado lo refuerza: un folio CLINICA_SELECCIONADA o CONFIRMADO
+  // (cita ya agendada, sin pendientes) nunca puede cambiar de clínica.
+  const clinicaYaElegida =
+    Boolean(tramite?.clinica) ||
+    tramite?.estado === 'CLINICA_SELECCIONADA' ||
+    tramite?.estado === 'CONFIRMADO';
 
   async function handleCotizar(e: React.FormEvent) {
     e.preventDefault();
@@ -309,6 +323,62 @@ export default function WebPage() {
     );
   }
 
+  // Etiqueta del botón "Continuar" de cada folio incompleto, según lo
+  // que le falta (misma que en la App).
+  function etiquetaContinuar(t: Tramite): string {
+    switch (t.estado) {
+      case 'INICIADO':
+      case 'DATOS_PENDIENTES':
+        return 'Continuar: elegir estudio';
+      case 'COTIZADO':
+        return 'Continuar: elegir clínica';
+      case 'CLINICA_SELECCIONADA':
+        return 'Continuar: confirmar fecha y hora';
+      default:
+        return 'Continuar';
+    }
+  }
+
+  // Carga un folio existente en el panel de reservación para continuar
+  // con solo los pasos que le faltan (retomar), sin crear uno nuevo.
+  function retomarEnPanel(t: Tramite) {
+    setTramite(t);
+    setClinicaId('');
+    setEstudioId('');
+    fijarFechaISO('');
+    setHora('');
+  }
+
+  // "Continuar" de un folio de Mis folios: abre el panel con ese folio
+  // para terminar el proceso en Web (el seguimiento queda en el Journey
+  // con canal WEB, como las demás acciones de esta página).
+  function continuarFolio(t: Tramite) {
+    retomarEnPanel(t);
+    setMensaje(`Continuando tu folio ${t.folio}. ${siguientePaso(t)}.`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Cotizar el estudio de un folio que aún no tiene (INICIADO /
+  // DATOS_PENDIENTES): no se crea otro folio, se cotiza este mismo.
+  async function handleCotizarExistente() {
+    if (!tramite || !estudioId) return;
+    setCargando(true);
+    try {
+      const cotizado = await cotizar(tramite.id, estudioId, 'WEB');
+      setTramite(cotizado);
+      setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
+      await cargarFolios(sesionPaciente?.id, curpEfectiva);
+    } catch (err) {
+      setMensaje(
+        isApiError(err)
+          ? err.message
+          : 'No se pudo cotizar: el backend no respondió y no se guardó nada.',
+      );
+    } finally {
+      setCargando(false);
+    }
+  }
+
   return (
     <div>
       <h1>Reserva tu estudio en línea</h1>
@@ -382,66 +452,106 @@ export default function WebPage() {
               <p>
                 Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
               </p>
-              <p>
-                Estudio: {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
-              </p>
+              {tramite.estudioId ? (
+                <p>
+                  Estudio: {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
+                </p>
+              ) : (
+                <p>Este folio aún no tiene estudio.</p>
+              )}
               <p className="muted">Canal de origen: {tramite.canalOrigen}</p>
 
-              <h3>Elige clínica</h3>
-              <div className="form">
-                <select value={clinicaEfectivaId} onChange={(e) => setClinicaId(e.target.value)}>
-                  <option value="">Selecciona una clínica</option>
-                  {clinicas.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.nombre} ({c.ciudad})
-                    </option>
-                  ))}
-                </select>
-                {tramite.estado === 'COTIZADO' && (
-                  <button type="button" className="btn btn-secondary" onClick={handleClinica} disabled={!clinicaEfectivaId || cargando}>
-                    Seleccionar clínica
+              {!tramite.estudioId ? (
+                <div className="form">
+                  <label>
+                    Estudio
+                    <select value={estudioId} onChange={(e) => setEstudioId(e.target.value)}>
+                      <option value="">Selecciona un estudio</option>
+                      {estudios.map((est) => (
+                        <option key={est.id} value={est.id}>
+                          {est.nombre} — ${est.precio}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {estudioSeleccionado && (
+                    <p className="precio">
+                      Precio: <strong>${estudioSeleccionado.precio}</strong>
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void handleCotizarExistente()}
+                    disabled={!estudioId || cargando}
+                  >
+                    {cargando ? 'Cotizando…' : 'Cotizar'}
                   </button>
-                )}
-              </div>
-              {tramite.clinica && <p>Clínica: <strong>{tramite.clinica.nombre}</strong> ({tramite.clinica.ciudad})</p>}
-
-              {(tramite.estado === 'COTIZADO' || tramite.estado === 'CLINICA_SELECCIONADA') && clinicaEfectivaId && (
+                </div>
+              ) : (
                 <>
-                  <h3>Elige fecha y hora de tu cita</h3>
+                  <h3>Elige clínica</h3>
                   <div className="form">
-                    <label>
-                      Fecha (calendario)
-                      <input type="date" value={fechaISO} onChange={(e) => fijarFechaISO(e.target.value)} />
-                    </label>
-                    <label>
-                      Fecha (DD/MM/AAAA)
-                      <input
-                        type="text"
-                        value={fechaLatina}
-                        onChange={(e) => fijarFechaLatina(e.target.value)}
-                        placeholder="25/11/2026"
-                        inputMode="numeric"
-                      />
-                    </label>
-                  </div>
-                  <ParrillaHorarios
-                    clinicaId={clinicaEfectivaId}
-                    fechaISO={fechaISO}
-                    estudioId={tramite.estudio.id}
-                    exceptoTramiteId={tramite.id}
-                    horaSeleccionada={hora}
-                    onSeleccionar={setHora}
-                  />
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => void handleConfirmar()}
-                      disabled={!fechaISO || !hora || cargando}
+                    <select
+                      value={clinicaEfectivaId}
+                      onChange={(e) => setClinicaId(e.target.value)}
+                      disabled={clinicaYaElegida}
                     >
-                      Confirmar reservación
-                    </button>
+                      <option value="">Selecciona una clínica</option>
+                      {clinicas.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nombre} ({c.ciudad})
+                        </option>
+                      ))}
+                    </select>
+                    {tramite.estado === 'COTIZADO' && (
+                      <button type="button" className="btn btn-secondary" onClick={handleClinica} disabled={!clinicaEfectivaId || cargando}>
+                        Seleccionar clínica
+                      </button>
+                    )}
                   </div>
+                  {clinicaYaElegida && <p className="muted">La clínica ya está elegida para este folio.</p>}
+                  {tramite.clinica && <p>Clínica: <strong>{tramite.clinica.nombre}</strong> ({tramite.clinica.ciudad})</p>}
+
+                  {(tramite.estado === 'COTIZADO' || tramite.estado === 'CLINICA_SELECCIONADA') && clinicaEfectivaId && (
+                    <>
+                      <h3>Elige fecha y hora de tu cita</h3>
+                      <div className="form">
+                        <label>
+                          Fecha (calendario)
+                          <input type="date" value={fechaISO} onChange={(e) => fijarFechaISO(e.target.value)} />
+                        </label>
+                        <label>
+                          Fecha (DD/MM/AAAA)
+                          <input
+                            type="text"
+                            value={fechaLatina}
+                            onChange={(e) => fijarFechaLatina(e.target.value)}
+                            placeholder="25/11/2026"
+                            inputMode="numeric"
+                          />
+                        </label>
+                      </div>
+                      <ParrillaHorarios
+                        clinicaId={clinicaEfectivaId}
+                        fechaISO={fechaISO}
+                        estudioId={tramite.estudio.id}
+                        exceptoTramiteId={tramite.id}
+                        horaSeleccionada={hora}
+                        onSeleccionar={setHora}
+                      />
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => void handleConfirmar()}
+                          disabled={!fechaISO || !hora || cargando}
+                        >
+                          Confirmar reservación
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 
@@ -485,9 +595,16 @@ export default function WebPage() {
                   {t.clinica ? ` · ${t.clinica.nombre}` : ''}
                   {t.fechaCita ? ` · Cita: ${formatearFechaHora(t.fechaCita)}` : ''}
                 </span>
-                <Link className="btn btn-small" to={`/journey/${encodeURIComponent(t.folio)}`}>
-                  Ver Journey
-                </Link>
+                <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {ESTADOS_PENDIENTES.includes(t.estado) && (
+                    <button type="button" className="btn btn-small" onClick={() => continuarFolio(t)}>
+                      {etiquetaContinuar(t)}
+                    </button>
+                  )}
+                  <Link className="btn btn-small" to={`/journey/${encodeURIComponent(t.folio)}`}>
+                    Ver Journey
+                  </Link>
+                </span>
               </li>
             ))}
           </ul>
