@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   actualizarPaciente,
   buscarPacientePorCurp,
@@ -59,7 +58,7 @@ function faltantesDe(t: Tramite): string[] {
   return f;
 }
 
-/** Estados interrumpidos: se pueden continuar (CONTINUAR PROCESO). CONFIRMADO y terminales, no. */
+/** Estados interrumpidos: se pueden continuar (Continuar proceso). CONFIRMADO y terminales, no. */
 const ESTADOS_CONTINUABLES = ['INICIADO', 'DATOS_PENDIENTES', 'COTIZADO', 'CLINICA_SELECCIONADA'];
 const ESTADOS_TERMINALES = ['ATENDIDO', 'NO_PRESENTADO', 'NO_REALIZADO', 'CANCELADO'];
 
@@ -79,9 +78,10 @@ function ContenidoAsesor() {
   const [mostrarHistorial, setMostrarHistorial] = useState(false);
 
   // Panel de acción del folio en pantalla: solo se muestra el panel de
-  // la acción elegida (Ver / Modificar / Eliminar-Cancelar). CONTINUAR
-  // PROCESO no es un panel: carga el folio en Nueva reservación.
-  const [panelAccion, setPanelAccion] = useState<'ver' | 'modificar' | 'cierre'>('ver');
+  // la acción elegida (ver / editar datos del paciente / editar la
+  // reservación / eliminar-cancelar / continuar proceso). La vista de
+  // solo lectura es la que se abre por defecto desde "Ver" en la lista.
+  const [panelAccion, setPanelAccion] = useState<'ver' | 'editar-paciente' | 'editar-reservacion' | 'cierre' | 'continuar'>('ver');
 
   // Editar datos del paciente del trámite en pantalla (PUT
   // /api/pacientes/{id}). Sin campo de contraseña: aquí no se toca.
@@ -345,6 +345,9 @@ function ContenidoAsesor() {
       setTramites((prev) =>
         prev.map((t) => (t.id === tramite.id ? { ...t, paciente: actualizado } : t)),
       );
+      // Tras guardar, se vuelve a la vista de solo lectura (como en
+      // editar la reservación y en cancelar/eliminar).
+      setPanelAccion('ver');
     } catch (err) {
       setMensaje(
         isApiError(err)
@@ -422,11 +425,11 @@ function ContenidoAsesor() {
     }
   }
 
-  // --- CONTINUAR PROCESO: carga el folio interrumpido en el flujo de
-  // Nueva reservación (mismo camino de retomar del 409), con canal
-  // CALL_CENTER, continuando solo lo que falta. Solo usa los endpoints
-  // de pasos (cotizar / seleccionar clínica / confirmar): nunca el PUT
-  // de edición, así que no pide la nota obligatoria. -----------------
+  // --- CONTINUAR PROCESO: muestra el panel de continuación en el
+  // detalle (mismo camino de retomar del 409), con canal CALL_CENTER,
+  // continuando solo lo que falta. Solo usa los endpoints de pasos
+  // (cotizar / seleccionar clínica / confirmar): nunca el PUT de
+  // edición, así que no pide la nota obligatoria. -------------------
   function cargarFolioEnReserva(t: Tramite) {
     setResPaciente(t.paciente ?? null);
     setResFolios(tramites.filter((x) => !x.eliminado));
@@ -437,9 +440,25 @@ function ContenidoAsesor() {
     setResFechaLatina('');
     setResHora('');
     setResMensaje(
-      `Folio ${t.folio} cargado en Nueva reservación: continúa con lo que falta (${textoFaltantes(faltantesDe(t))}), con canal Call Center.`,
+      `Folio ${t.folio} cargado: continúa con lo que falta (${textoFaltantes(faltantesDe(t))}), con canal Call Center.`,
     );
-    document.getElementById('nueva-reservacion')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // El espacio de trabajo se muestra en el detalle (panel
+    // "continuar"), no se baja a Nueva reservación.
+    setPanelAccion('continuar');
+  }
+
+  /** Si el folio que avanza es el folio en pantalla, sincroniza el
+   *  detalle, la lista y el timeline (la insignia del detalle no
+   *  queda con el estado viejo tras cotizar/elegir/confirmar). */
+  async function sincronizarTramiteEnPantalla(actualizado: Tramite) {
+    if (tramite?.id !== actualizado.id) return;
+    setTramite(actualizado);
+    setTramites((prev) => prev.map((t) => (t.id === actualizado.id ? actualizado : t)));
+    try {
+      setTimeline(await getTimeline(actualizado.id));
+    } catch {
+      // El timeline se recarga al volver a abrir el folio; no bloquea.
+    }
   }
 
   function handleContinuarProceso() {
@@ -553,6 +572,7 @@ function ContenidoAsesor() {
         try {
           const t = await getTramitePorFolio(existente.folio);
           setResTramite(t);
+          void sincronizarTramiteEnPantalla(t);
           setResClinicaId(t.clinica?.id ?? '');
           setResFechaISO('');
           setResFechaLatina('');
@@ -588,6 +608,7 @@ function ContenidoAsesor() {
     try {
       const cotizado = await cotizar(resTramite.id, resEstudioId, 'CALL_CENTER');
       setResTramite(cotizado);
+      void sincronizarTramiteEnPantalla(cotizado);
       setResMensaje(`Estudio cotizado: ${cotizado.estudio.nombre} — $${cotizado.precioCotizado}. Ahora elige la clínica.`);
     } catch (err) {
       const existente = parsearTramiteExistente(err);
@@ -595,6 +616,7 @@ function ContenidoAsesor() {
         try {
           const t = await getTramitePorFolio(existente.folio);
           setResTramite(t);
+          void sincronizarTramiteEnPantalla(t);
           setResClinicaId(t.clinica?.id ?? '');
           setResMensaje(`${existente.mensaje} Te falta: ${textoFaltantes(existente.faltantes)}. Continúa con ese folio, sin crear uno nuevo.`);
           return;
@@ -619,6 +641,7 @@ function ContenidoAsesor() {
     try {
       const actualizado = await seleccionarClinica(resTramite.id, resClinicaId, 'CALL_CENTER');
       setResTramite(actualizado);
+      void sincronizarTramiteEnPantalla(actualizado);
       setResMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}. Ahora elige fecha y hora.`);
     } catch (err) {
       setResMensaje(
@@ -641,6 +664,7 @@ function ContenidoAsesor() {
       // las horas libres cercanas) se muestra tal cual.
       const confirmado = await confirmar(resTramite.id, fechaHoraISO, 'CALL_CENTER');
       setResTramite(confirmado);
+      void sincronizarTramiteEnPantalla(confirmado);
       setResMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,
       );
@@ -800,41 +824,18 @@ function ContenidoAsesor() {
         <section className="card" style={{ marginTop: 16 }}>
           <h2>Folios del paciente</h2>
           <ul>
-            {foliosActivos.map((t) => {
-              const modificable = !t.eliminado;
-              const editable = !t.eliminado && !ESTADOS_TERMINALES.includes(t.estado);
-              const continuable = !t.eliminado && ESTADOS_CONTINUABLES.includes(t.estado);
-              return (
-                <li key={t.id} className="dato-row">
-                  <span>
-                    <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
-                  </span>
-                  <span className="actions">
-                    <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('ver'); }}>
-                      Ver
-                    </button>
-                    <Link className="btn btn-small btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
-                      Ver Journey
-                    </Link>
-                    {modificable && (
-                      <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('modificar'); }}>
-                        Modificar
-                      </button>
-                    )}
-                    {editable && (
-                      <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('cierre'); }}>
-                        Eliminar / Cancelar
-                      </button>
-                    )}
-                    {continuable && (
-                      <button type="button" className="btn btn-small btn-primary" onClick={() => cargarFolioEnReserva(t)}>
-                        CONTINUAR PROCESO
-                      </button>
-                    )}
-                  </span>
-                </li>
-              );
-            })}
+            {foliosActivos.map((t) => (
+              <li key={t.id} className="dato-row">
+                <span>
+                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
+                </span>
+                <span className="actions">
+                  <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('ver'); }}>
+                    Ver
+                  </button>
+                </span>
+              </li>
+            ))}
           </ul>
         </section>
       )}
@@ -866,12 +867,14 @@ function ContenidoAsesor() {
         <>
           <div className="card actions" style={{ marginTop: 16 }}>
             <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
-            <button type="button" className={panelAccion === 'ver' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('ver')}>
-              Ver
-            </button>
             {!tramite.eliminado && (
-              <button type="button" className={panelAccion === 'modificar' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('modificar')}>
-                Modificar
+              <button type="button" className={panelAccion === 'editar-paciente' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('editar-paciente')}>
+                Editar datos del paciente
+              </button>
+            )}
+            {tramiteEditable && (
+              <button type="button" className={panelAccion === 'editar-reservacion' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('editar-reservacion')}>
+                Editar la reservación
               </button>
             )}
             {tramiteEditable && (
@@ -880,13 +883,10 @@ function ContenidoAsesor() {
               </button>
             )}
             {tramiteContinuable && (
-              <button type="button" className="btn btn-primary" onClick={handleContinuarProceso}>
-                CONTINUAR PROCESO
+              <button type="button" className={panelAccion === 'continuar' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={handleContinuarProceso}>
+                Continuar proceso
               </button>
             )}
-            <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(tramite.folio)}`}>
-              Ver Journey
-            </Link>
           </div>
           <div className="grid-2" style={{ marginTop: 16 }}>
             <section className="card">
@@ -938,7 +938,7 @@ function ContenidoAsesor() {
             </div>
           </>
         )}
-        {panelAccion === 'modificar' && !tramite.eliminado && (
+        {panelAccion === 'editar-paciente' && !tramite.eliminado && (
           <>
             <h3>Editar datos del paciente</h3>
                 <form onSubmit={handleEditarPaciente} className="form">
@@ -983,9 +983,11 @@ function ContenidoAsesor() {
                     {editandoPaciente ? 'Guardando…' : 'Guardar datos del paciente'}
                   </button>
                 </form>
-                {tramiteEditable && (
-                  <>
-                    <h3>Editar la reservación</h3>
+              </>
+            )}
+            {panelAccion === 'editar-reservacion' && tramiteEditable && (
+              <>
+                <h3>Editar la reservación</h3>
                 <p className="muted">
                   Cambia el estudio, la clínica o la fecha y hora. Si cambias el estudio, el precio se vuelve a
                   cotizar y se verifica que no tenga otro folio activo de ese estudio. La nota es obligatoria y queda en el historial.
@@ -1051,8 +1053,6 @@ function ContenidoAsesor() {
                     {editandoTramite ? 'Guardando…' : 'Guardar cambios de la reservación'}
                   </button>
                 </form>
-                  </>
-                )}
               </>
             )}
             {panelAccion === 'cierre' && tramiteEditable && (
@@ -1101,6 +1101,121 @@ function ContenidoAsesor() {
                           : 'Elige la acción y escribe la causa'}
                   </button>
                 </div>
+              </>
+            )}
+            {panelAccion === 'continuar' && (
+              <>
+                <h3>Continuar proceso</h3>
+                <p className="muted">
+                  Continúa con lo que falta de este folio ({textoFaltantes(faltantesDe(tramite))}), con canal Call Center.
+                  Sin nota: solo se guardan los pasos que completes.
+                </p>
+                {resMensaje && <p className="notice" role="status">{resMensaje}</p>}
+                {resTramite && resTramite.id === tramite.id && (
+                  <>
+                    <p>
+                      Folio: <strong>{resTramite.folio}</strong>{' '}
+                      <EstadoBadge estado={resTramite.estado} clinica={resTramite.clinica?.nombre} /> ·{' '}
+                      {resTramite.estudio.nombre} — <strong>${resTramite.precioCotizado}</strong>
+                    </p>
+                    {(resTramite.estado === 'INICIADO' || resTramite.estado === 'DATOS_PENDIENTES') && (
+                      <>
+                        <h3>1 · Estudio</h3>
+                        <div className="form">
+                          <label>
+                            Estudio
+                            <select value={resEstudioId} onChange={(e) => setResEstudioId(e.target.value)}>
+                              <option value="">Selecciona un estudio</option>
+                              {estudios.map((est) => (
+                                <option key={est.id} value={est.id}>
+                                  {est.nombre} — ${est.precio}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => void handleCotizarResTramite()}
+                            disabled={resCargando || !resEstudioId}
+                          >
+                            Cotizar estudio de este folio
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {resTramite.estado === 'COTIZADO' && (
+                      <>
+                        <h3>2 · Clínica</h3>
+                        <div className="form">
+                          <label>
+                            Clínica
+                            <select value={resClinicaId} onChange={(e) => setResClinicaId(e.target.value)}>
+                              <option value="">Selecciona una clínica</option>
+                              {clinicas.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.nombre} ({c.ciudad})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void handleSeleccionarClinicaReserva()}
+                            disabled={!resClinicaId || resCargando}
+                          >
+                            Seleccionar clínica
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {resTramite.estado === 'CLINICA_SELECCIONADA' && (
+                      <>
+                        <h3>3 · Fecha y hora de la cita</h3>
+                        <div className="form">
+                          <label>
+                            Fecha (calendario)
+                            <input type="date" value={resFechaISO} onChange={(e) => resFijarFechaISO(e.target.value)} />
+                          </label>
+                          <label>
+                            Fecha (DD/MM/AAAA)
+                            <input
+                              type="text"
+                              value={resFechaLatina}
+                              onChange={(e) => resFijarFechaLatina(e.target.value)}
+                              placeholder="25/11/2026"
+                              inputMode="numeric"
+                            />
+                          </label>
+                        </div>
+                        <ParrillaHorarios
+                          clinicaId={resClinicaId}
+                          fechaISO={resFechaISO}
+                          estudioId={resEstudioId}
+                          exceptoTramiteId={resTramite.id}
+                          horaSeleccionada={resHora}
+                          onSeleccionar={setResHora}
+                        />
+                        <div className="actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => void handleConfirmarReserva()}
+                            disabled={!resFechaISO || !resHora || resCargando}
+                          >
+                            Confirmar reservación
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {resTramite.estado === 'CONFIRMADO' && resTramite.fechaCita && (
+                      <p>
+                        Cita confirmada: <strong>{formatearFechaHora(resTramite.fechaCita)}</strong>
+                      </p>
+                    )}
+                  </>
+                )}
               </>
             )}
           </section>
@@ -1275,19 +1390,13 @@ function ContenidoAsesor() {
                       >
                         Confirmar reservación
                       </button>
-                      <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(resTramite.folio)}`}>
-                        Ver Journey
-                      </Link>
                     </div>
                   </>
                 )}
 
                 {resTramite.estado === 'CONFIRMADO' && resTramite.fechaCita && (
                   <p>
-                    Cita confirmada: <strong>{formatearFechaHora(resTramite.fechaCita)}</strong>{' '}
-                    <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(resTramite.folio)}`}>
-                      Ver Journey
-                    </Link>
+                    Cita confirmada: <strong>{formatearFechaHora(resTramite.fechaCita)}</strong>
                   </p>
                 )}
               </>
@@ -1369,7 +1478,7 @@ function ContenidoAsesor() {
               target="_blank"
               rel="noopener noreferrer"
             >
-              CONSULTAR CURP
+              Consultar CURP
             </a>
           </div>
         </form>

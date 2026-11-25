@@ -97,7 +97,7 @@ button, .btn { font: inherit; cursor: pointer; }
 .precio { font-size: 1.1rem; }
 .notice { background: #e6f5f1; border: 1px solid #b7e4d6; border-radius: 8px; padding: 12px; margin-top: 16px; }
 
-.badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
+.badge { display: inline-flex; align-items: center; justify-content: center; align-self: center; line-height: 1.2; padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
 .badge-info { background: #d9f1eb; color: var(--azul); }
 .badge-primary { background: var(--azul); color: #fff; }
 .badge-success { background: #b7e4d6; color: var(--azul); }
