@@ -78,6 +78,11 @@ function ContenidoAsesor() {
   // verse sin un clic extra); en folios activos se despliega con el botón.
   const [mostrarHistorial, setMostrarHistorial] = useState(false);
 
+  // Panel de acción del folio en pantalla: solo se muestra el panel de
+  // la acción elegida (Ver / Modificar / Eliminar-Cancelar). CONTINUAR
+  // PROCESO no es un panel: carga el folio en Nueva reservación.
+  const [panelAccion, setPanelAccion] = useState<'ver' | 'modificar' | 'cierre'>('ver');
+
   // Editar datos del paciente del trámite en pantalla (PUT
   // /api/pacientes/{id}). Sin campo de contraseña: aquí no se toca.
   const [editNombre, setEditNombre] = useState('');
@@ -244,6 +249,7 @@ function ContenidoAsesor() {
       // Se abre el primer folio NO eliminado (los eliminados quedan
       // en el historial del paciente, no como folio en pantalla).
       await cargarTramite(lista.find((t) => !t.eliminado) ?? lista[0]);
+      setPanelAccion('ver');
       const activos = lista.filter((t) => !t.eliminado).length;
       if (activos > 1) {
         setMensaje(`Encontré ${activos} folios. Elige uno de la lista para ver su contexto.`);
@@ -370,6 +376,7 @@ function ContenidoAsesor() {
       setTimeline(await getTimeline(actualizado.id));
       setTramites((prev) => prev.map((t) => (t.id === actualizado.id ? actualizado : t)));
       setEditNota('');
+      setPanelAccion('ver');
       setMensaje(
         `Reservación actualizada: folio ${actualizado.folio} · ${actualizado.estudio.nombre} — $${actualizado.precioCotizado}. El cambio quedó en el historial y en el Journey.`,
       );
@@ -398,6 +405,7 @@ function ContenidoAsesor() {
       setTramites((prev) => prev.map((t) => (t.id === actualizado.id ? actualizado : t)));
       setMotivoCierre('');
       setAccionCierre('');
+      setPanelAccion('ver');
       setMensaje(
         accionCierre === 'cancelar'
           ? `Folio ${actualizado.folio} cancelado. Quedó registrado con su causa en el historial y en el Journey.`
@@ -416,20 +424,27 @@ function ContenidoAsesor() {
 
   // --- CONTINUAR PROCESO: carga el folio interrumpido en el flujo de
   // Nueva reservación (mismo camino de retomar del 409), con canal
-  // CALL_CENTER, continuando solo lo que falta. ----------------------
-  function handleContinuarProceso() {
-    if (!tramite) return;
-    setResPaciente(tramite.paciente ?? null);
-    setResFolios(tramites.filter((t) => !t.eliminado));
-    setResTramite(tramite);
-    setResEstudioId(tramite.estudioId ?? '');
-    setResClinicaId(tramite.clinica?.id ?? '');
+  // CALL_CENTER, continuando solo lo que falta. Solo usa los endpoints
+  // de pasos (cotizar / seleccionar clínica / confirmar): nunca el PUT
+  // de edición, así que no pide la nota obligatoria. -----------------
+  function cargarFolioEnReserva(t: Tramite) {
+    setResPaciente(t.paciente ?? null);
+    setResFolios(tramites.filter((x) => !x.eliminado));
+    setResTramite(t);
+    setResEstudioId(t.estudioId ?? '');
+    setResClinicaId(t.clinica?.id ?? '');
     setResFechaISO('');
     setResFechaLatina('');
     setResHora('');
     setResMensaje(
-      `Folio ${tramite.folio} cargado en Nueva reservación: continúa con lo que falta (${textoFaltantes(faltantesDe(tramite))}), con canal Call Center.`,
+      `Folio ${t.folio} cargado en Nueva reservación: continúa con lo que falta (${textoFaltantes(faltantesDe(t))}), con canal Call Center.`,
     );
+    document.getElementById('nueva-reservacion')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function handleContinuarProceso() {
+    if (!tramite) return;
+    cargarFolioEnReserva(tramite);
   }
 
   // --- Nueva reservación: buscar por CURP, teléfono, folio o nombre --
@@ -785,16 +800,41 @@ function ContenidoAsesor() {
         <section className="card" style={{ marginTop: 16 }}>
           <h2>Folios del paciente</h2>
           <ul>
-            {foliosActivos.map((t) => (
-              <li key={t.id} className="dato-row">
-                <span>
-                  <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
-                </span>
-                <button type="button" className="btn btn-small" onClick={() => void cargarTramite(t)}>
-                  Ver
-                </button>
-              </li>
-            ))}
+            {foliosActivos.map((t) => {
+              const modificable = !t.eliminado;
+              const editable = !t.eliminado && !ESTADOS_TERMINALES.includes(t.estado);
+              const continuable = !t.eliminado && ESTADOS_CONTINUABLES.includes(t.estado);
+              return (
+                <li key={t.id} className="dato-row">
+                  <span>
+                    <strong>{t.folio}</strong> · {t.estudio.nombre} — ${t.precioCotizado} <EstadoBadge estado={t.estado} clinica={t.clinica?.nombre} />
+                  </span>
+                  <span className="actions">
+                    <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('ver'); }}>
+                      Ver
+                    </button>
+                    <Link className="btn btn-small btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
+                      Ver Journey
+                    </Link>
+                    {modificable && (
+                      <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('modificar'); }}>
+                        Modificar
+                      </button>
+                    )}
+                    {editable && (
+                      <button type="button" className="btn btn-small" onClick={() => { void cargarTramite(t); setPanelAccion('cierre'); }}>
+                        Eliminar / Cancelar
+                      </button>
+                    )}
+                    {continuable && (
+                      <button type="button" className="btn btn-small btn-primary" onClick={() => cargarFolioEnReserva(t)}>
+                        CONTINUAR PROCESO
+                      </button>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
@@ -823,9 +863,36 @@ function ContenidoAsesor() {
       )}
 
       {tramite && (
-        <div className="grid-2" style={{ marginTop: 16 }}>
-          <section className="card">
-            <h2>Contexto acumulado</h2>
+        <>
+          <div className="card actions" style={{ marginTop: 16 }}>
+            <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
+            <button type="button" className={panelAccion === 'ver' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('ver')}>
+              Ver
+            </button>
+            {!tramite.eliminado && (
+              <button type="button" className={panelAccion === 'modificar' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('modificar')}>
+                Modificar
+              </button>
+            )}
+            {tramiteEditable && (
+              <button type="button" className={panelAccion === 'cierre' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setPanelAccion('cierre')}>
+                Eliminar / Cancelar
+              </button>
+            )}
+            {tramiteContinuable && (
+              <button type="button" className="btn btn-primary" onClick={handleContinuarProceso}>
+                CONTINUAR PROCESO
+              </button>
+            )}
+            <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(tramite.folio)}`}>
+              Ver Journey
+            </Link>
+          </div>
+          <div className="grid-2" style={{ marginTop: 16 }}>
+            <section className="card">
+              {panelAccion === 'ver' && (
+                <>
+                  <h2>Contexto acumulado</h2>
             <p>
               Folio: <strong>{tramite.folio}</strong> <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
               {tramite.eliminado && <span className="badge badge-danger"> Eliminado</span>}
@@ -846,15 +913,6 @@ function ContenidoAsesor() {
               <dt>Canal de origen</dt><dd>{tramite.canalOrigen}</dd>
             </dl>
 
-            {tramiteContinuable && (
-              <div className="actions">
-                <button type="button" className="btn btn-primary" onClick={handleContinuarProceso}>
-                  CONTINUAR PROCESO
-                </button>
-                <span className="muted">Carga este folio en Nueva reservación y sigue solo con lo que falta.</span>
-              </div>
-            )}
-
             <h3>Datos pendientes</h3>
             {tramite.datosPendientes.length === 0 ? (
               <p className="muted">Sin datos pendientes.</p>
@@ -871,9 +929,18 @@ function ContenidoAsesor() {
               </ul>
             )}
 
-            {!tramite.eliminado && (
-              <>
-                <h3>Editar datos del paciente</h3>
+            <h3>Nota del asesor</h3>
+            <div className="form">
+              <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={3} placeholder="Escribe una nota para el expediente…" disabled={tramite.eliminado} />
+              <button type="button" className="btn btn-secondary" onClick={() => void handleGuardarNota()} disabled={guardando || tramite.eliminado}>
+                Guardar nota
+              </button>
+            </div>
+          </>
+        )}
+        {panelAccion === 'modificar' && !tramite.eliminado && (
+          <>
+            <h3>Editar datos del paciente</h3>
                 <form onSubmit={handleEditarPaciente} className="form">
                   <label>
                     Nombre completo
@@ -916,12 +983,9 @@ function ContenidoAsesor() {
                     {editandoPaciente ? 'Guardando…' : 'Guardar datos del paciente'}
                   </button>
                 </form>
-              </>
-            )}
-
-            {tramiteEditable && (
-              <>
-                <h3>Editar la reservación</h3>
+                {tramiteEditable && (
+                  <>
+                    <h3>Editar la reservación</h3>
                 <p className="muted">
                   Cambia el estudio, la clínica o la fecha y hora. Si cambias el estudio, el precio se vuelve a
                   cotizar y se verifica que no tenga otro folio activo de ese estudio. La nota es obligatoria y queda en el historial.
@@ -987,7 +1051,12 @@ function ContenidoAsesor() {
                     {editandoTramite ? 'Guardando…' : 'Guardar cambios de la reservación'}
                   </button>
                 </form>
-
+                  </>
+                )}
+              </>
+            )}
+            {panelAccion === 'cierre' && tramiteEditable && (
+              <>
                 <h3>Cancelar o eliminar el folio</h3>
                 <p className="muted">
                   Primero elige la acción y escribe la causa (ambos obligatorios). Cancelar deja el folio marcado
@@ -1034,14 +1103,6 @@ function ContenidoAsesor() {
                 </div>
               </>
             )}
-
-            <h3>Nota del asesor</h3>
-            <div className="form">
-              <textarea value={nota} onChange={(e) => setNota(e.target.value)} rows={3} placeholder="Escribe una nota para el expediente…" disabled={tramite.eliminado} />
-              <button type="button" className="btn btn-secondary" onClick={() => void handleGuardarNota()} disabled={guardando || tramite.eliminado}>
-                Guardar nota
-              </button>
-            </div>
           </section>
 
           <section className="card">
@@ -1052,9 +1113,10 @@ function ContenidoAsesor() {
             {mostrarHistorial && <Timeline eventos={timeline} />}
           </section>
         </div>
+        </>
       )}
 
-      <section className="card" style={{ marginTop: 16 }}>
+      <section className="card" id="nueva-reservacion" style={{ marginTop: 16 }}>
         <h2>Nueva reservación</h2>
         <p className="muted">
           Busca al paciente por CURP, teléfono, folio o nombre (sin pedir teléfono al crear la reservación):
@@ -1310,9 +1372,6 @@ function ContenidoAsesor() {
               CONSULTAR CURP
             </a>
           </div>
-          <p className="muted">
-            CONSULTAR CURP abre gob.mx/curp en una pestaña nueva, sin cerrar la consola del asesor.
-          </p>
         </form>
       </section>
     </div>
