@@ -11,7 +11,7 @@ flowchart LR
   Web[Web React] --> API[API REST :8080]
   WA[WhatsApp simulado] --> API
   CC[Call Center] --> API
-  App[App móvil] --> API
+  App[App web (móvil)] --> API
   CL[Clínica] --> API
   API --> Svc[TramiteService]
   Svc --> Ev[EventoService append-only]
@@ -29,7 +29,7 @@ erDiagram
   TRAMITE ||--o| CITA : agenda
   TRAMITE }o--|| ESTUDIO : cotiza
   TRAMITE }o--|| CLINICA : elige
-  PACIENTE { uuid id PK, string telefono UK, string email, date fechaNacimiento }
+  PACIENTE { uuid id PK, string curp UK, string telefono, string email, date fechaNacimiento }
   TRAMITE { uuid id PK, string folio UK, string estado, uuid pacienteId FK }
   EVENTO { uuid id PK, uuid tramiteId FK, string tipo, string canal, string actor, jsonb payload, timestamp ts }
 ```
@@ -55,7 +55,9 @@ sequenceDiagram
 ## Decisiones
 
 1. Event log append-only: el estado se reconstruye desde eventos; nada escribe estado directo.
-2. Teléfono como llave de identidad principal (WhatsApp = teléfono); folio como llave de continuidad.
+2. CURP como llave de identidad principal (login y WhatsApp solo por
+   CURP; teléfono opcional); folio como llave de continuidad.
 3. Canales simulados sobre la misma API; si Salud Digna da sandbox real, se conecta el mismo endpoint.
-4. Seguridad demo: JWT + fallback header `X-Rol` documentado como simplificación de hackatón, no producción.
+4. Seguridad demo: JWT + fallback header `X-Rol` (Paciente, Asesor,
+   Administrador, Doctor) documentado como simplificación de hackatón, no producción.
 5. Datos 100% sintéticos (Ana ficticia). Nada de datos reales de pacientes.
