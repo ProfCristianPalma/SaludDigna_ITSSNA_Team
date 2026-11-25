@@ -86,6 +86,30 @@ public class TramiteService {
     }
 
     /**
+     * Borra un tramite VACIO (red de seguridad del bug de WhatsApp
+     * 2026-11-24: el bot creaba el folio ANTES de elegir el estudio y
+     * el folio vacio quedaba guardado aunque luego se retomara el
+     * tramite existente). Solo si esta INICIADO o DATOS_PENDIENTES y
+     * SIN estudio, clinica, fecha ni precio: jamas se borra un tramite
+     * con datos. Primero sus citas, luego sus eventos y luego el
+     * tramite. Devuelve true si lo borro, false si no era vacio (en
+     * ese caso no se toca nada).
+     */
+    public boolean eliminarTramiteVacio(UUID tramiteId) {
+        Tramite tramite = buscar(tramiteId);
+        if (tramite.getEstudioId() != null || tramite.getClinicaId() != null
+                || tramite.getFechaCita() != null || tramite.getPrecioCotizado() != null
+                || (tramite.getEstado() != EstadoTramite.INICIADO
+                        && tramite.getEstado() != EstadoTramite.DATOS_PENDIENTES)) {
+            return false;
+        }
+        citas.findByTramiteId(tramiteId).ifPresent(citas::delete);
+        eventos.eliminarEventosDeTramite(tramiteId);
+        tramites.deleteById(tramiteId);
+        return true;
+    }
+
+    /**
      * Trámite activo de un paciente para un estudio (si existe): un
      * paciente solo puede tener UN trámite activo por estudio. Los
      * terminales (ATENDIDO, NO_PRESENTADO, NO_REALIZADO) no cuentan:

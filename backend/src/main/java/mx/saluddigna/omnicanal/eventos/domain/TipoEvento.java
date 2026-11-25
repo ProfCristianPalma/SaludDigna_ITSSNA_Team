@@ -26,6 +26,12 @@ public final class TipoEvento {
     /** El bot ofreció las horas libres de un día (payload {"fecha":"AAAA-MM-DD"}):
      * así una hora suelta después ("10", "10:00") se entiende para ese día. */
     public static final String HORAS_OFRECIDAS = "horas.ofrecidas";
+    /** El bot no entendió un mensaje de WhatsApp (payload {"mensaje":"<texto crudo>"}):
+     * queda en el log para revisar después qué escriben los pacientes.
+     * Solo se registra cuando hay un trámite en contexto: el evento
+     * necesita un tramite_id, así que los "no entendí" sin folio (sin
+     * trámites activos) no quedan registrados. */
+    public static final String MENSAJE_NO_ENTENDIDO = "mensaje.no_entendido";
 
     private TipoEvento() {
     }

@@ -39,4 +39,15 @@ public class EventoService {
     public boolean tieneEvento(UUID tramiteId, String tipo) {
         return repository.existsByTramiteIdAndTipo(tramiteId, tipo);
     }
+
+    /**
+     * Borra TODOS los eventos de un tramite. Excepcion al append-only:
+     * solo se usa al eliminar un folio vacio que nunca debio existir
+     * (ver TramiteService.eliminarTramiteVacio, red de seguridad del
+     * bug de WhatsApp 2026-11-24); jamas se borran eventos de un
+     * tramite con estudio, clinica o fecha.
+     */
+    public void eliminarEventosDeTramite(UUID tramiteId) {
+        repository.deleteAll(listarTimeline(tramiteId));
+    }
 }

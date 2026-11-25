@@ -53,6 +53,28 @@ import org.springframework.web.server.ResponseStatusException;
  *   folio", "SD-2026-0012"): el bot lo confirma con entendido=true;
  *   nunca responde "No entendí" a un mensaje que ya seleccionó
  *   el folio (la selección se resuelve antes de la intención).
+ * - "opcion N" / "numero N" (y un número solo donde no significa
+ *   otra cosa) eligen la opción N de la lista que el bot acaba de
+ *   ofrecer EN ESE NIVEL: menú (sin folio en contexto), folios,
+ *   estudios, clínicas u horas. En COTIZADO "1" sigue siendo la
+ *   clínica 1 y en CLINICA_SELECCIONADA un número solo sigue
+ *   siendo una hora: ahí no se toca.
+ * - "regresar" / "atrás" es un nivel atrás sin deshacer datos (en
+ *   CLINICA_SELECCIONADA vuelve a elegir clínica; en COTIZADO
+ *   re-muestra la cotización; sin folio en contexto va al menú);
+ *   "volver" a secas sigue siendo cambiar de folio con folio en
+ *   contexto; "volver al inicio" / "volver al menú" va al menú
+ *   principal con la CURP recordada (nunca se olvida la CURP).
+ * - "nuevo" es la señal de crear ("quiero un nuevo tramite",
+ *   "quiero reservar/agendar un estudio", "otra cita") y
+ *   "continuar/seguir" es la de retomar el activo: nunca se
+ *   confunden. El trámite NUNCA se crea antes de nombrar el
+ *   estudio y pasar el chequeo de duplicado: si ya hay un activo
+ *   de ese estudio se retoma ese folio, y si quedó un folio vacío
+ *   en contexto se borra (TramiteService.eliminarTramiteVacio).
+ * - Lo que el bot no entiende queda en el log como evento
+ *   mensaje.no_entendido con el texto crudo (solo con trámite en
+ *   contexto: el evento necesita un tramite_id).
  * - Un "hola" o "ayuda" NO crea trámites: solo se crea uno cuando el
  *   usuario pide un estudio concreto. La identidad es SOLO por CURP:
  *   el request trae `curp` (o la CURP viene en el mensaje) y, si no
@@ -373,9 +395,15 @@ public class CanalController {
      * Seleccion de un folio de la lista por su numero ("folio 2", "opcion 1",
      * "numero 3"). Un numero suelto ("1", "2") o "la 1" NO se usa para esto:
      * en un tramite COTIZADO "1" significa "clinica 1", asi que seria ambiguo.
+     * El grupo 1 es la palabra ("folio" | "opcion" | "numero"): con folio en
+     * contexto, "opcion N" / "numero N" NO es seleccion de folio (lo resuelve
+     * procesarIntencion segun el nivel: clinica, hora o estudio); solo
+     * "folio N" selecciona un folio con contexto. Sin contexto, las tres
+     * formas seleccionan de la lista (salvo "opcion 1"/"opcion 2", que son
+     * las opciones del menu: ver mis folios / tramite nuevo).
      */
     private static final Pattern SELECCION_PATTERN =
-            Pattern.compile("(?:folio|opci[oó]n|n[uú]mero)\\s*(\\d{1,2})", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("(folio|opci[oó]n|n[uú]mero)\\s*(\\d{1,2})", Pattern.CASE_INSENSITIVE);
 
     /**
      * Ordinales en palabras para elegir de la lista ("primer folio",
@@ -438,12 +466,28 @@ public class CanalController {
             }
             return respuestaListaFolios(paciente, activos, texto, norm);
         }
+        // "volver al inicio" / "volver al menú": menú principal con la
+        // CURP recordada. NUNCA se olvida la CURP aquí: para eso está
+        // "cambiar de CURP". Va antes de pedir-lista/volver: es una
+        // orden sobre el nivel, no sobre un folio.
+        if (esVolverAlMenu(norm)) {
+            return respuestaMenu(paciente, activos);
+        }
+        // "regresar" / "atrás": un nivel atrás sin deshacer datos (en
+        // CLINICA_SELECCIONADA vuelve a elegir clínica; en COTIZADO
+        // re-muestra la cotización; sin folio en contexto va al menú).
+        // "volver" a secas NO es esto: es cambiar de folio (abajo).
+        if (esRegresarNivel(norm)) {
+            return respuestaRegresarNivel(paciente, activos, req.folio());
+        }
         if (esVolver(norm)) {
-            // "volver" a secas y sin folio en contexto: volver al inicio,
-            // es decir, olvidar la CURP y pedirla de nuevo. Con un folio
-            // en contexto, "volver" lista los folios (como antes).
-            if (esVolverSolo(norm) && (req.folio() == null || req.folio().isBlank())) {
-                return respuestaOlvidaCurp();
+            // "volver" a secas es cambiar de folio: con un folio en
+            // contexto, lista los folios (como antes). Sin folio en
+            // contexto no hay de qué cambiar: menú principal con la
+            // CURP recordada (ya no se olvida la CURP por decir
+            // "volver"; para eso está "cambiar de CURP").
+            if (req.folio() == null || req.folio().isBlank()) {
+                return respuestaMenu(paciente, activos);
             }
             if (activos.isEmpty()) {
                 return respuestaSinTramite("Hola " + paciente.getNombre().split(" ")[0]
@@ -472,18 +516,72 @@ public class CanalController {
             return respuestaMenu(paciente, activos);
         }
 
+        // "opcion 1" / "numero 2" sin folio en contexto: eligen del MENÚ
+        // ("Ver mis folios" / "Iniciar un trámite nuevo"). A partir de 3
+        // no hay opción de menú: es el folio N de la lista y lo resuelve
+        // indicePedido abajo, como antes. En la lista de folios, los
+        // folios 1 y 2 se eligen con "folio 1" / "folio 2", con ordinales
+        // ("primer folio") o con el folio completo: sin contexto el bot
+        // no distingue la pantalla del menú de la de la lista, y el menú
+        // es la que manda para 1 y 2.
+        if (!conContexto) {
+            Optional<Integer> selMenu = seleccionOpcionPura(norm);
+            if (selMenu.isPresent() && selMenu.get() == 1) {
+                if (activos.isEmpty()) {
+                    return respuestaSinTramite("Hola " + paciente.getNombre().split(" ")[0]
+                            + ", aún no tienes trámites activos. Puedo cotizarte un estudio:\n" + textoEstudios(),
+                            "ELEGIR_ESTUDIO", true, opcionesEstudios());
+                }
+                return respuestaListaFolios(paciente, activos, texto, norm,
+                        "Hola " + paciente.getNombre().split(" ")[0] + ", tienes " + activos.size()
+                                + " trámites activos. ¿Con cuál seguimos?");
+            }
+            if (selMenu.isPresent() && selMenu.get() == 2) {
+                return respuestaPreguntarEstudio(paciente);
+            }
+        }
+
         // "Iniciar un trámite nuevo" (o cotizar sin folio en contexto):
-        // crear el trámite y preguntar el estudio, antes de resolver
-        // folio/intención, para no caer en la lista con "No entendí".
+        // preguntar el estudio, antes de resolver folio/intención, para
+        // no caer en la lista con "No entendí". El trámite YA NO se crea
+        // aquí (bug 2026-11-24: se creaba un folio vacío INICIADO sin
+        // estudio y luego, al nombrar el estudio, aparecía el duplicado):
+        // se crea solo al nombrar el estudio y pasar el duplicado.
         boolean seleccionExplicita = SELECCION_PATTERN.matcher(texto).find()
                 || FOLIO_PATTERN.matcher(texto).find()
                 || ORDINAL_MASC.matcher(norm).find();
+        // El mensaje nombra un estudio sin folio en contexto y sin
+        // selección explícita: PRIMERO el chequeo de duplicado, nunca
+        // crear antes. Si ya hay un activo de ese estudio se retoma ese
+        // folio (y si había un único folio vacío huérfano, se borra);
+        // si no hay duplicado y hay un único trámite vacío pendiente se
+        // reutiliza (no se crea otro folio); si no, se crea CON estudio
+        // y se cotiza en el mismo paso, como responderSinFolios.
+        // "continuar/seguir/retomar/ver..." es consultar, no crear: eso
+        // lo resuelve esConsultarTramite abajo.
+        Optional<Estudio> estudioNombrado = elegirEstudio(norm);
+        if (!seleccionExplicita && !conContexto && estudioNombrado.isPresent() && !esConsultarEstudio(norm)) {
+            Estudio estudio = estudioNombrado.get();
+            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio, null);
+            if (retomar.isPresent()) {
+                List<Tramite> vacios = vaciosSinEstudio(activos);
+                if (vacios.size() == 1) {
+                    tramites.eliminarTramiteVacio(vacios.get(0).getId());
+                }
+                return respuestaConTramite(retomar.get().tramite(),
+                        tramites.listarActivosDe(paciente.getId()), retomar.get());
+            }
+            List<Tramite> vacios = vaciosSinEstudio(activos);
+            if (vacios.size() == 1) {
+                Tramite cotizado = tramites.cotizar(vacios.get(0).getId(), estudio.getId());
+                return respuestaCotizado(paciente, cotizado, estudio);
+            }
+            Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.getId(), "WHATSAPP");
+            nuevo = tramites.cotizar(nuevo.getId(), estudio.getId());
+            return respuestaCotizado(paciente, nuevo, estudio);
+        }
         if (!seleccionExplicita && esNuevoTramiteExplicito(norm)) {
-            Tramite nuevo = tramites.crearTramite(paciente.getId(), null, "WHATSAPP");
-            List<Tramite> actualizados = tramites.listarActivosDe(paciente.getId());
-            return respuestaConTramite(nuevo, actualizados, new ResultadoBot("Perfecto, "
-                    + paciente.getNombre().split(" ")[0] + ", empecé un trámite nuevo: " + nuevo.getFolio()
-                    + ". ¿Qué estudio necesitas?\n" + textoEstudios(), true, opcionesEstudios()));
+            return respuestaPreguntarEstudio(paciente);
         }
         if (!seleccionExplicita && !conContexto && esCotizacionGenerica(norm)) {
             List<Tramite> pendientes = activos.stream()
@@ -498,11 +596,10 @@ public class CanalController {
                         + " (aún sin estudio). ¿Qué estudio necesitas?\n" + textoEstudios(), true, opcionesEstudios()));
             }
             if (!activos.isEmpty()) {
-                Tramite nuevo = tramites.crearTramite(paciente.getId(), null, "WHATSAPP");
-                List<Tramite> actualizados = tramites.listarActivosDe(paciente.getId());
-                return respuestaConTramite(nuevo, actualizados, new ResultadoBot("Perfecto, "
-                        + paciente.getNombre().split(" ")[0] + ", empecé un trámite nuevo: " + nuevo.getFolio()
-                        + ". ¿Qué estudio necesitas?\n" + textoEstudios(), true, opcionesEstudios()));
+                // Ya NO se crea un trámite vacío: solo se pregunta el
+                // estudio (el trámite se crea al nombrarlo, con el
+                // chequeo de duplicado de arriba).
+                return respuestaPreguntarEstudio(paciente);
             }
             // Sin folios activos: no se crea trámite aún; solo se
             // ofrecen los estudios (el trámite se crea al elegir uno).
@@ -760,10 +857,7 @@ public class CanalController {
             nuevo = tramites.cotizar(nuevo.getId(), estudio.get().getId());
             eventos.registrar(nuevo.getId(), TipoEvento.CANAL_CAMBIADO, "WHATSAPP", "PACIENTE",
                     "{\"mensaje\":\"" + escapar(texto) + "\"}");
-            String resp = "Hola " + nombre + ", tu trámite " + nuevo.getFolio() + " ya está cotizado: "
-                    + estudio.get().getNombre() + " por $" + nuevo.getPrecioCotizado()
-                    + ". Ahora elige clínica.";
-            return respuestaConTramite(nuevo, List.of(), new ResultadoBot(resp, true, opcionesClinicas(), nuevo));
+            return respuestaCotizado(paciente, nuevo, estudio.get());
         }
         if (esSaludoOAyuda(norm) || quiereCotizar(norm)) {
             String resp = "Hola " + nombre + ", soy Salud Digna 👋. Aún no tienes trámites activos. Puedo cotizarte un estudio:\n"
@@ -810,6 +904,13 @@ public class CanalController {
 
     /** Por qué el mensaje es ambiguo entre varios folios (p. ej. dos COTIZADO y el usuario escribió "1"). */
     private Optional<String> motivoAmbiguo(String norm, String texto, List<Tramite> activos) {
+        // El mensaje nombra DOS estudios distintos: hay que aclarar
+        // cuál, no cotizar el primero que aparezca.
+        List<Estudio> mencionados = estudiosMencionados(norm);
+        if (mencionados.size() > 1) {
+            return Optional.of("mencionaste dos estudios (" + mencionados.get(0).getNombre()
+                    + " y " + mencionados.get(1).getNombre() + "); dime solo uno");
+        }
         if (elegirClinica(norm).isPresent() || norm.contains("clinica")) {
             long n = activos.stream().filter(t -> t.getEstado() == EstadoTramite.COTIZADO).count();
             if (n > 1) return Optional.of("tienes " + n + " trámites en estado COTIZADO");
@@ -920,7 +1021,8 @@ public class CanalController {
             return respuestaSinTramite("Perfecto, " + nombre + ", te reconocí por tu CURP. Aún no tienes trámites activos. ¿Qué estudio necesitas?\n" + textoEstudios(),
                     "ELEGIR_ESTUDIO", true, opcionesEstudios(), paciente.getCurp());
         }
-        return respuestaSinTramite("Perfecto, " + nombre + ", te reconocí por tu CURP. ¿Qué quieres hacer?",
+        return respuestaSinTramite("Perfecto, " + nombre + ", te reconocí por tu CURP. ¿Qué quieres hacer?\n"
+                + listarOpcionesNumeradas(List.of("Ver mis folios", "Iniciar un trámite nuevo")),
                 "ELEGIR_ACCION", true, List.of("Ver mis folios", "Iniciar un trámite nuevo"), paciente.getCurp());
     }
 
@@ -933,10 +1035,17 @@ public class CanalController {
     private int indicePedido(String texto, String norm, boolean conContexto, int total) {
         Matcher m = SELECCION_PATTERN.matcher(texto);
         if (m.find()) {
-            try {
-                return Integer.parseInt(m.group(1));
-            } catch (NumberFormatException e) {
-                // sigue a los ordinales
+            // "folio N" selecciona un folio siempre. "opcion N" /
+            // "numero N" solo selecciona un folio SIN contexto: con
+            // folio en contexto es la opción N del nivel actual
+            // (clínica, hora o estudio) y lo resuelve procesarIntencion.
+            String palabra = m.group(1).toLowerCase();
+            if (palabra.startsWith("folio") || !conContexto) {
+                try {
+                    return Integer.parseInt(m.group(2));
+                } catch (NumberFormatException e) {
+                    // sigue a los ordinales
+                }
             }
         }
         // Ordinal junto a la palabra "folio" ("primer folio",
@@ -973,6 +1082,154 @@ public class CanalController {
         };
     }
 
+    /** "opcion N" / "numero N" y nada más ("opcion 1", "numero 2"): el índice pedido (1-based). */
+    private static Optional<Integer> seleccionOpcionPura(String norm) {
+        Matcher m = Pattern.compile("^(?:opcion|numero)\\s*(\\d{1,2})\\s*[.,;:!]*$").matcher(norm.trim());
+        if (!m.find()) return Optional.empty();
+        try {
+            return Optional.of(Integer.parseInt(m.group(1)));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** Un número solo ("1", "2"): el índice pedido (1-based). */
+    private static Optional<Integer> numeroSolo(String norm) {
+        String t = norm.trim().replaceAll("[.,;:!]+$", "");
+        if (!t.matches("\\d{1,2}")) return Optional.empty();
+        try {
+            return Optional.of(Integer.parseInt(t));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * La opción N de la lista que el bot acaba de ofrecer EN ESTE NIVEL
+     * (procesarIntencion, con folio en contexto): clínica N en COTIZADO,
+     * hora/fecha N en CLINICA_SELECCIONADA, estudio N en INICIADO /
+     * ATENDIDO / cerrados, "¿Cuándo es mi cita?" (1) o "Ayuda" (2) en
+     * CONFIRMADO. Vacío si N está fuera de rango (cae al "no entendí",
+     * que lista las opciones).
+     */
+    private Optional<ResultadoBot> resolverSeleccionOpcion(Paciente paciente, Tramite tramite, int n) {
+        return switch (tramite.getEstado()) {
+            case COTIZADO -> {
+                List<Clinica> lista = clinicas.findAll();
+                if (n < 1 || n > lista.size()) yield Optional.empty();
+                yield Optional.of(clinicaElegida(paciente, tramite, lista.get(n - 1)));
+            }
+            case CLINICA_SELECCIONADA -> resolverSeleccionFechaHora(paciente, tramite, n);
+            case INICIADO, DATOS_PENDIENTES -> {
+                List<Estudio> lista = estudios.findAll();
+                if (n < 1 || n > lista.size()) yield Optional.empty();
+                yield Optional.of(cotizarEstudio(paciente, tramite, lista.get(n - 1)));
+            }
+            case CONFIRMADO -> {
+                if (n == 1) yield Optional.of(new ResultadoBot(resumenEstado(paciente, tramite)
+                        + "\nAhora puedes:\n" + listarOpcionesNumeradas(opcionesPara(tramite)),
+                        true, opcionesPara(tramite), tramite));
+                if (n == 2) yield Optional.of(ayuda(paciente, tramite));
+                yield Optional.empty();
+            }
+            case ATENDIDO -> {
+                List<Estudio> lista = estudios.findAll();
+                if (n < 1 || n > lista.size()) yield Optional.empty();
+                yield nuevoTramiteParaEstudio(paciente, tramite, lista.get(n - 1),
+                        "Tu trámite " + tramite.getFolio() + " ya fue atendido.");
+            }
+            case NO_PRESENTADO, NO_REALIZADO -> {
+                List<Estudio> lista = estudios.findAll();
+                if (n < 1 || n > lista.size()) yield Optional.empty();
+                yield nuevoTramiteParaEstudio(paciente, tramite, lista.get(n - 1),
+                        "Tu trámite " + tramite.getFolio() + " ya se cerró (" + descripcionEstado(tramite) + ").");
+            }
+        };
+    }
+
+    /**
+     * La opción N en CLINICA_SELECCIONADA: si lo último que el bot
+     * ofreció fueron las horas libres de un día, la opción N es la hora
+     * N libre y la última es "Cambiar clínica"; si no, las opciones son
+     * Hoy (1) / Mañana (2) / fecha (3) / "Cambiar clínica" (4), como en
+     * opcionesFechas(). "Lo último ofrecido" se sabe por el log: el
+     * último evento que no es CANAL_CAMBIADO (el del mensaje actual)
+     * es HORAS_OFRECIDAS solo si el bot ofreció horas por último.
+     */
+    private Optional<ResultadoBot> resolverSeleccionFechaHora(Paciente paciente, Tramite tramite, int n) {
+        if (horasOfrecidasPorUltimo(tramite.getId())) {
+            Optional<LocalDate> fechaOfrecida = fechaOfrecidaReciente(tramite.getId());
+            if (fechaOfrecida.isPresent()) {
+                List<String> libres = tramites.horasLibresDelDia(tramite.getClinicaId(), fechaOfrecida.get(),
+                        tramite.getEstudioId(), tramite.getId());
+                if (n >= 1 && n <= libres.size()) {
+                    LocalTime hora = LocalTime.parse(libres.get(n - 1), FORMATO_HORA);
+                    return Optional.of(confirmarFechaHora(paciente, tramite,
+                            LocalDateTime.of(fechaOfrecida.get(), hora)));
+                }
+                if (n == libres.size() + 1) {
+                    return Optional.of(volverAElegirClinica(paciente, tramite));
+                }
+                return Optional.empty();
+            }
+        }
+        if (n == 1) return Optional.of(ofrecerHorasLibres(paciente, tramite, LocalDate.now()));
+        if (n == 2 || n == 3) return Optional.of(ofrecerHorasLibres(paciente, tramite, LocalDate.now().plusDays(1)));
+        if (n == 4) return Optional.of(volverAElegirClinica(paciente, tramite));
+        return Optional.empty();
+    }
+
+    /** ¿Lo último que el bot ofreció en este trámite fueron horas libres?
+     * Se ignora CANAL_CAMBIADO (es el evento del mensaje actual). */
+    private boolean horasOfrecidasPorUltimo(UUID tramiteId) {
+        List<mx.saluddigna.omnicanal.eventos.domain.Evento> timeline = eventos.listarTimeline(tramiteId);
+        for (int i = timeline.size() - 1; i >= 0; i--) {
+            String tipo = timeline.get(i).getTipo();
+            if (TipoEvento.CANAL_CAMBIADO.equals(tipo)) continue;
+            return TipoEvento.HORAS_OFRECIDAS.equals(tipo);
+        }
+        return false;
+    }
+
+    /** El mensaje habla de CONSULTAR/retomar un estudio ("quiero
+     * continuar/seguir mi ultrasonido", "ver mi estudio"): no es crear
+     * uno nuevo, aunque nombre el estudio. */
+    private boolean esConsultarEstudio(String norm) {
+        return norm.contains("continuar") || norm.contains("seguir") || norm.contains("retomar")
+                || norm.contains("ver mi") || norm.contains("revisar") || norm.contains("consultar")
+                || norm.contains("como va") || norm.contains("cuando") || norm.contains("donde")
+                || norm.contains("que tengo") || norm.contains("estado de") || norm.contains("mi cita");
+    }
+
+    /** Estudios mencionados en el mensaje (por nombre completo o por
+     * prefijo): para aclarar cuando nombra dos distintos. */
+    private List<Estudio> estudiosMencionados(String norm) {
+        List<Estudio> mencionados = new ArrayList<>();
+        for (Estudio e : estudios.findAll()) {
+            String n = normalizar(e.getNombre());
+            if (n.isBlank()) continue;
+            if (norm.contains(n) || coincidePorPrefijo(norm, n)) mencionados.add(e);
+        }
+        return mencionados;
+    }
+
+    /**
+     * Tolerancia a errores de dedo / nombres recortados: una palabra del
+     * mensaje (de 4 letras o más) que sea prefijo de una palabra del
+     * nombre del catálogo ("ultra" -> "ultrasonido", "pueb" -> "puebla"),
+     * o al revés. Las palabras cortas no cuentan ("ana" no es prefijo
+     * válido: podría ser el nombre del paciente).
+     */
+    private static boolean coincidePorPrefijo(String norm, String nombre) {
+        for (String palabra : norm.split("\\s+")) {
+            if (palabra.length() < 4) continue;
+            for (String parte : nombre.split("\\s+")) {
+                if (parte.length() >= 4 && (parte.startsWith(palabra) || palabra.startsWith(parte))) return true;
+            }
+        }
+        return false;
+    }
+
     /** Quita del mensaje los trozos que seleccionan un folio, para
      * procesar solo lo que queda ("folio 1, la de Puebla" -> "la de Puebla"). */
     private String quitarSeleccion(String texto) {
@@ -1006,7 +1263,7 @@ public class CanalController {
             String estudio = t.getEstudioId() == null ? "sin estudio aún"
                     : estudios.findById(t.getEstudioId()).map(Estudio::getNombre).orElse("estudio");
             sb.append(i + 1).append(") ").append(t.getFolio()).append(" — ").append(estudio)
-                    .append(" (").append(etiquetaEstado(t)).append(")\n");
+                    .append(" (").append(etiquetaEstado(t)).append("): ").append(descripcionCortaRetomar(t)).append("\n");
         }
         sb.append("Responde con el folio (por ejemplo ").append(activos.get(0).getFolio())
                 .append("), con 'folio 1', 'folio 2', etc., o con 'primer folio', 'segundo', etc.");
@@ -1065,6 +1322,71 @@ public class CanalController {
             };
         }
 
+        // Selección explícita de las opciones que el bot acaba de ofrecer:
+        // "opcion 1" / "numero 2" siempre es la opción N de la lista de
+        // ESTE nivel (clínicas en COTIZADO, horas/fechas en
+        // CLINICA_SELECCIONADA, estudios en INICIADO, etc.). Un número
+        // solo también elige la opción N en los niveles donde no
+        // significa otra cosa (estudios, cita confirmada, cerrados); en
+        // COTIZADO "1" ya es la clínica 1 y en CLINICA_SELECCIONADA un
+        // número solo es una hora: ahí no se toca.
+        Optional<Integer> sel = seleccionOpcionPura(norm);
+        if (sel.isEmpty() && (tramite.getEstado() == EstadoTramite.INICIADO
+                || tramite.getEstado() == EstadoTramite.DATOS_PENDIENTES
+                || tramite.getEstado() == EstadoTramite.CONFIRMADO
+                || tramite.getEstado() == EstadoTramite.ATENDIDO
+                || tramite.getEstado() == EstadoTramite.NO_PRESENTADO
+                || tramite.getEstado() == EstadoTramite.NO_REALIZADO)) {
+            sel = numeroSolo(norm);
+        }
+        if (sel.isPresent()) {
+            Optional<ResultadoBot> porSeleccion = resolverSeleccionOpcion(paciente, tramite, sel.get());
+            if (porSeleccion.isPresent()) return porSeleccion.get();
+            // Fuera de rango: cae al "no entendí", que lista las opciones.
+        }
+
+        // Nombrar un estudio DISTINTO al del folio en contexto = pedir un
+        // trámite NUEVO para ese estudio (el folio actual ya tiene el
+        // suyo): se chequea duplicado y se crea o se retoma, como en
+        // ATENDIDO y en los cerrados. Si nombra el MISMO estudio, es
+        // continuar con este folio (se re-ofrecen sus opciones). La
+        // acción del paso actual manda: una clínica en COTIZADO o una
+        // fecha en CLINICA_SELECCIONADA no es un estudio nuevo aunque
+        // el mensaje también lo mencione.
+        String nombre = paciente.getNombre().split(" ")[0];
+        Optional<Estudio> estudioNombrado = elegirEstudio(norm);
+        if (estudioNombrado.isPresent() && tramite.getEstudioId() != null
+                && (tramite.getEstado() == EstadoTramite.COTIZADO
+                        || tramite.getEstado() == EstadoTramite.CLINICA_SELECCIONADA
+                        || tramite.getEstado() == EstadoTramite.CONFIRMADO)) {
+            boolean accionActual = switch (tramite.getEstado()) {
+                case COTIZADO -> elegirClinica(norm).isPresent();
+                case CLINICA_SELECCIONADA -> pareceFechaHora(texto) || norm.contains("cambiar clinica");
+                case CONFIRMADO -> norm.contains("cita") || norm.contains("cuando") || norm.contains("donde")
+                        || norm.contains("fecha") || norm.contains("hora");
+                default -> false;
+            };
+            if (!accionActual) {
+                if (estudioNombrado.get().getId().equals(tramite.getEstudioId())) {
+                    // Mismo estudio: continuar con este folio.
+                    if (tramite.getEstado() == EstadoTramite.COTIZADO) {
+                        return new ResultadoBot(listarClinicasTexto(nombre, tramite),
+                                true, opcionesClinicas(), tramite);
+                    }
+                    if (tramite.getEstado() == EstadoTramite.CLINICA_SELECCIONADA) {
+                        return new ResultadoBot("¡Perfecto! ¿Qué día prefieres para tu cita en "
+                                + nombreClinica(tramite) + "? Dime la fecha en formato DD/MM/AAAA (por ejemplo " + manana()
+                                + "), o dime \"hoy\" o \"mañana\", y te muestro las horas libres de ese día.",
+                                true, opcionesFechas(), tramite);
+                    }
+                    return new ResultadoBot(resumenEstado(paciente, tramite), true, List.of("Ayuda"), tramite);
+                }
+                Optional<ResultadoBot> nuevo = nuevoTramiteParaEstudio(paciente, tramite, estudioNombrado.get(),
+                        "Tu trámite " + tramite.getFolio() + " ya es de " + nombreEstudio(tramite) + ".");
+                if (nuevo.isPresent()) return nuevo.get();
+            }
+        }
+
         Optional<ResultadoBot> accion = switch (tramite.getEstado()) {
             case COTIZADO -> procesarCotizado(paciente, tramite, norm);
             case CLINICA_SELECCIONADA -> procesarClinicaSeleccionada(paciente, tramite, texto, norm);
@@ -1092,14 +1414,14 @@ public class CanalController {
 
     private Optional<ResultadoBot> procesarCotizado(Paciente paciente, Tramite tramite, String norm) {
         String nombre = paciente.getNombre().split(" ")[0];
+        if (norm.contains("otro estudio") || norm.contains("nuevo estudio")
+                || norm.contains("cambiar estudio") || norm.contains("otro tramite")
+                || norm.contains("nuevo tramite")) {
+            return Optional.of(respuestaOtroEstudio(paciente, tramite));
+        }
         Optional<Clinica> elegida = elegirClinica(norm);
         if (elegida.isPresent()) {
-            Tramite actualizado = tramites.seleccionarClinica(tramite.getId(), elegida.get().getId());
-            String resp = "Listo " + nombre + ", elegiste " + elegida.get().getNombre()
-                    + " para tu trámite " + actualizado.getFolio()
-                    + ". Ahora dime qué día prefieres para tu cita, en formato DD/MM/AAAA (por ejemplo " + manana()
-                    + "), y te muestro las horas libres de ese día.";
-            return Optional.of(new ResultadoBot(resp, true, opcionesFechas(), actualizado));
+            return Optional.of(clinicaElegida(paciente, tramite, elegida.get()));
         }
         // "quiero" solo vale si es querer seguir con la clínica: un
         // "quiero una pizza" no es querer elegir clínica y debe caer
@@ -1114,12 +1436,13 @@ public class CanalController {
     }
 
     private Optional<ResultadoBot> procesarClinicaSeleccionada(Paciente paciente, Tramite tramite, String mensajeCrudo, String norm) {
-        String nombre = paciente.getNombre().split(" ")[0];
+        if (norm.contains("otro estudio") || norm.contains("nuevo estudio")
+                || norm.contains("cambiar estudio") || norm.contains("otro tramite")
+                || norm.contains("nuevo tramite")) {
+            return Optional.of(respuestaOtroEstudio(paciente, tramite));
+        }
         if (norm.contains("cambiar clinica") || norm.contains("cambiar la clinica") || norm.contains("otra clinica")) {
-            Tramite actualizado = tramites.volverACotizado(tramite.getId());
-            return Optional.of(new ResultadoBot("Sin problema, " + nombre + ". Volvemos a elegir clínica para tu trámite "
-                    + actualizado.getFolio() + ":\n" + listarClinicasTexto(nombre, actualizado),
-                    true, opcionesClinicas(), actualizado));
+            return Optional.of(volverAElegirClinica(paciente, tramite));
         }
         // Fecha con hora opcional ("25/11/2026 10:00", "25/11 a las 10",
         // "el 25", "el 25 de noviembre", "mañana"). Sin hora NO se asume
@@ -1322,21 +1645,160 @@ public class CanalController {
         return String.join(" y ", partes);
     }
 
+    /**
+     * Cotiza un estudio en el trámite en contexto (INICIADO /
+     * DATOS_PENDIENTES): primero el chequeo de duplicado (retomar en
+     * vez de duplicar) y solo si no hay duplicado se cotiza. Red de
+     * seguridad del bug de WhatsApp: si se retoma y el trámite en
+     * contexto era un folio vacío (sin estudio), se borra para que no
+     * quede un folio huérfano en Historial; el retomar sigue sobre el
+     * folio EXISTENTE (excluido de la búsqueda por exceptoTramiteId).
+     */
+    private ResultadoBot cotizarEstudio(Paciente paciente, Tramite tramite, Estudio estudio) {
+        Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio, tramite.getId());
+        if (retomar.isPresent()) {
+            if (tramite.getEstudioId() == null) {
+                tramites.eliminarTramiteVacio(tramite.getId());
+            }
+            return retomar.get();
+        }
+        Tramite actualizado = tramites.cotizar(tramite.getId(), estudio.getId());
+        return new ResultadoBot("Hola " + paciente.getNombre().split(" ")[0] + ", tu trámite " + actualizado.getFolio()
+                + " ya está cotizado: " + estudio.getNombre()
+                + " por $" + actualizado.getPrecioCotizado()
+                + ". Ahora elige clínica.", true, opcionesClinicas(), actualizado);
+    }
+
+    /**
+     * Trámite NUEVO para un estudio cuando el folio en contexto ya tiene
+     * otro estudio o ya se cerró: primero el chequeo de duplicado (si ya
+     * hay un activo de ese estudio se retoma ese folio, no se crea otro)
+     * y solo si no hay duplicado se crea CON estudio y se cotiza en el
+     * mismo paso. `prefijo` es la frase del folio en contexto ("Tu
+     * trámite X ya fue atendido." / "Tu trámite X ya es de Y.").
+     */
+    private Optional<ResultadoBot> nuevoTramiteParaEstudio(Paciente paciente, Tramite tramiteEnContexto,
+                                                           Estudio estudio, String prefijo) {
+        Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio,
+                tramiteEnContexto == null ? null : tramiteEnContexto.getId());
+        if (retomar.isPresent()) return retomar;
+        Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.getId(), "WHATSAPP");
+        nuevo = tramites.cotizar(nuevo.getId(), estudio.getId());
+        return Optional.of(new ResultadoBot(prefijo + " Te creé uno nuevo: "
+                + nuevo.getFolio() + " — " + estudio.getNombre() + " por $" + nuevo.getPrecioCotizado()
+                + ". Ahora elige clínica.", true, opcionesClinicas(), nuevo));
+    }
+
+    /** Respuesta de un trámite recién cotizado: folio, estudio, precio y a elegir clínica. */
+    private Map<String, Object> respuestaCotizado(Paciente paciente, Tramite cotizado, Estudio estudio) {
+        return respuestaConTramite(cotizado, tramites.listarActivosDe(paciente.getId()),
+                new ResultadoBot("Hola " + paciente.getNombre().split(" ")[0] + ", tu trámite " + cotizado.getFolio()
+                        + " ya está cotizado: " + estudio.getNombre() + " por $" + cotizado.getPrecioCotizado()
+                        + ". Ahora elige clínica.", true, opcionesClinicas(), cotizado));
+    }
+
+    /** "¿Qué estudio necesitas?" sin crear ningún trámite: el trámite se
+     * crea solo al nombrar el estudio y pasar el duplicado. */
+    private Map<String, Object> respuestaPreguntarEstudio(Paciente paciente) {
+        return respuestaSinTramite("Perfecto, " + paciente.getNombre().split(" ")[0]
+                + ", ¿qué estudio necesitas?\n" + textoEstudios(),
+                "ELEGIR_ESTUDIO", true, opcionesEstudios(), paciente.getCurp());
+    }
+
+    /** Elige una clínica para el trámite en contexto (COTIZADO). */
+    private ResultadoBot clinicaElegida(Paciente paciente, Tramite tramite, Clinica elegida) {
+        Tramite actualizado = tramites.seleccionarClinica(tramite.getId(), elegida.getId());
+        String resp = "Listo " + paciente.getNombre().split(" ")[0] + ", elegiste " + elegida.getNombre()
+                + " para tu trámite " + actualizado.getFolio()
+                + ". Ahora dime qué día prefieres para tu cita, en formato DD/MM/AAAA (por ejemplo " + manana()
+                + "), y te muestro las horas libres de ese día.";
+        return new ResultadoBot(resp, true, opcionesFechas(), actualizado);
+    }
+
+    /** Vuelve a elegir clínica (de CLINICA_SELECCIONADA a COTIZADO): lo
+     * usan "cambiar clínica", "opcion N" = "Cambiar clínica" y
+     * "regresar" un nivel atrás. No crea folio nuevo. */
+    private ResultadoBot volverAElegirClinica(Paciente paciente, Tramite tramite) {
+        Tramite actualizado = tramites.volverACotizado(tramite.getId());
+        return new ResultadoBot("Sin problema, " + paciente.getNombre().split(" ")[0] + ". Volvemos a elegir clínica para tu trámite "
+                + actualizado.getFolio() + ":\n" + listarClinicasTexto(paciente.getNombre().split(" ")[0], actualizado),
+                true, opcionesClinicas(), actualizado);
+    }
+
+    /** "quiero otro estudio" con un folio que ya tiene estudio: no se
+     * deshace la cotización; se pregunta cuál otro estudio quiere y el
+     * siguiente mensaje (con el estudio nombrado) crea o retoma su trámite. */
+    private ResultadoBot respuestaOtroEstudio(Paciente paciente, Tramite tramite) {
+        return new ResultadoBot("Tu trámite " + tramite.getFolio() + " ya es de " + nombreEstudio(tramite)
+                + (tramite.getPrecioCotizado() == null ? "" : " por $" + tramite.getPrecioCotizado())
+                + ". Si quieres otro estudio, dime cuál necesitas:\n" + textoEstudios(),
+                true, opcionesEstudios(), tramite);
+    }
+
+    /** Trámites activos vacíos (sin estudio) del paciente: los folios
+     * huérfanos que dejó el bug de WhatsApp. */
+    private static List<Tramite> vaciosSinEstudio(List<Tramite> activos) {
+        return activos.stream()
+                .filter(t -> t.getEstudioId() == null
+                        && (t.getEstado() == EstadoTramite.INICIADO || t.getEstado() == EstadoTramite.DATOS_PENDIENTES))
+                .toList();
+    }
+
+    /**
+     * "regresar" / "atrás": un nivel atrás SIN deshacer datos.
+     * - CLINICA_SELECCIONADA: vuelve a elegir clínica (volverACotizado).
+     * - COTIZADO: re-muestra la cotización (estudio y precio, el paso
+     *   anterior) y se sigue eligiendo clínica.
+     * - CONFIRMADO: re-muestra la clínica y la fecha elegidas y el
+     *   resumen de la cita (no se des-confirma nada).
+     * - INICIADO / DATOS_PENDIENTES / cerrados, o sin folio en contexto:
+     *   menú principal (el nivel anterior a elegir estudio es el menú).
+     */
+    private Map<String, Object> respuestaRegresarNivel(Paciente paciente, List<Tramite> activos, String folioContexto) {
+        if (folioContexto == null || folioContexto.isBlank()) {
+            return respuestaMenu(paciente, activos);
+        }
+        Tramite tramite;
+        try {
+            tramite = tramites.buscarPorFolio(folioContexto.trim().toUpperCase());
+        } catch (ResponseStatusException e) {
+            return respuestaMenu(paciente, activos);
+        }
+        if (!tramite.getPaciente().getId().equals(paciente.getId())) {
+            return respuestaMenu(paciente, activos);
+        }
+        String nombre = paciente.getNombre().split(" ")[0];
+        return switch (tramite.getEstado()) {
+            case CLINICA_SELECCIONADA -> {
+                ResultadoBot r = volverAElegirClinica(paciente, tramite);
+                yield respuestaConTramite(r.tramite(), tramites.listarActivosDe(paciente.getId()), r);
+            }
+            case COTIZADO -> {
+                String texto = "Volvemos un paso atrás, " + nombre + ". Tu trámite " + tramite.getFolio()
+                        + " ya está cotizado: " + nombreEstudio(tramite)
+                        + (tramite.getPrecioCotizado() == null ? "" : " por $" + tramite.getPrecioCotizado())
+                        + ". Sigues eligiendo clínica:\n" + listarClinicasTexto(nombre, tramite);
+                yield respuestaConTramite(tramite, activos,
+                        new ResultadoBot(texto, true, opcionesClinicas(), tramite));
+            }
+            case CONFIRMADO -> {
+                String texto = "Volvemos un paso atrás, " + nombre + ": elegiste " + nombreClinica(tramite)
+                        + " para el " + (tramite.getFechaCita() == null ? "sin fecha"
+                                : tramite.getFechaCita().format(FORMATO_LATINO_HORA))
+                        + ". " + resumenEstado(paciente, tramite)
+                        + "\nAhora puedes:\n" + listarOpcionesNumeradas(opcionesPara(tramite));
+                yield respuestaConTramite(tramite, activos,
+                        new ResultadoBot(texto, true, opcionesPara(tramite), tramite));
+            }
+            default -> respuestaMenu(paciente, activos);
+        };
+    }
+
     private Optional<ResultadoBot> procesarInicio(Paciente paciente, Tramite tramite, String norm) {
         String nombre = paciente.getNombre().split(" ")[0];
         Optional<Estudio> estudio = elegirEstudio(norm);
         if (estudio.isPresent()) {
-            // Retomar en vez de duplicar: si ya hay un trámite activo
-            // de ese estudio, se sigue con ese folio (no se cotiza
-            // otro). El trámite que se está cotizando queda fuera de
-            // la búsqueda: es el mismo folio, no un duplicado.
-            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio.get(), tramite.getId());
-            if (retomar.isPresent()) return retomar;
-            Tramite actualizado = tramites.cotizar(tramite.getId(), estudio.get().getId());
-            return Optional.of(new ResultadoBot("Hola " + nombre + ", tu trámite " + actualizado.getFolio()
-                    + " ya está cotizado: " + estudio.get().getNombre()
-                    + " por $" + actualizado.getPrecioCotizado()
-                    + ". Ahora elige clínica.", true, opcionesClinicas(), actualizado));
+            return Optional.of(cotizarEstudio(paciente, tramite, estudio.get()));
         }
         if (quiereCotizar(norm)) {
             return Optional.of(new ResultadoBot("Claro " + nombre + ", estos son nuestros estudios:\n" + textoEstudios(),
@@ -1347,6 +1809,11 @@ public class CanalController {
 
     private Optional<ResultadoBot> procesarConfirmado(Paciente paciente, Tramite tramite, String norm) {
         String nombre = paciente.getNombre().split(" ")[0];
+        if (norm.contains("otro estudio") || norm.contains("nuevo estudio")
+                || norm.contains("cambiar estudio") || norm.contains("otro tramite")
+                || norm.contains("nuevo tramite")) {
+            return Optional.of(respuestaOtroEstudio(paciente, tramite));
+        }
         if (norm.contains("cambiar fecha") || norm.contains("cambiar la cita") || norm.contains("cambiar mi cita")
                 || norm.contains("reprogramar") || norm.contains("mover mi cita")) {
             return Optional.of(new ResultadoBot("Por WhatsApp no puedo cambiar la fecha de una cita ya confirmada, " + nombre
@@ -1368,13 +1835,8 @@ public class CanalController {
             // El trámite en contexto ya se cerró, pero puede haber
             // OTRO trámite activo del mismo estudio: entonces se
             // retoma ese en vez de crear uno nuevo.
-            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio.get(), null);
-            if (retomar.isPresent()) return retomar;
-            Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.get().getId(), "WHATSAPP");
-            nuevo = tramites.cotizar(nuevo.getId(), estudio.get().getId());
-            return Optional.of(new ResultadoBot("Tu trámite " + tramite.getFolio() + " ya fue atendido. Te creé uno nuevo: "
-                    + nuevo.getFolio() + " — " + estudio.get().getNombre() + " por $" + nuevo.getPrecioCotizado()
-                    + ". Ahora elige clínica.", true, opcionesClinicas(), nuevo));
+            return nuevoTramiteParaEstudio(paciente, tramite, estudio.get(),
+                    "Tu trámite " + tramite.getFolio() + " ya fue atendido.");
         }
         if (quiereCotizar(norm)) {
             return Optional.of(new ResultadoBot("Claro " + nombre + ", estos son nuestros estudios:\n" + textoEstudios(),
@@ -1392,14 +1854,8 @@ public class CanalController {
             // Como en procesarAtendido: el folio en contexto está
             // cerrado, pero puede haber OTRO trámite activo del mismo
             // estudio y ese se retoma en vez de crear uno nuevo.
-            Optional<ResultadoBot> retomar = respuestaRetomarSiDuplicado(paciente, estudio.get(), null);
-            if (retomar.isPresent()) return retomar;
-            Tramite nuevo = tramites.crearTramite(paciente.getId(), estudio.get().getId(), "WHATSAPP");
-            nuevo = tramites.cotizar(nuevo.getId(), estudio.get().getId());
-            return Optional.of(new ResultadoBot("Tu trámite " + tramite.getFolio() + " ya se cerró ("
-                    + descripcionEstado(tramite) + "). Te creé uno nuevo: "
-                    + nuevo.getFolio() + " — " + estudio.get().getNombre() + " por $" + nuevo.getPrecioCotizado()
-                    + ". Ahora elige clínica.", true, opcionesClinicas(), nuevo));
+            return nuevoTramiteParaEstudio(paciente, tramite, estudio.get(),
+                    "Tu trámite " + tramite.getFolio() + " ya se cerró (" + descripcionEstado(tramite) + ").");
         }
         if (quiereCotizar(norm)) {
             return Optional.of(new ResultadoBot("Claro " + nombre + ", estos son nuestros estudios:\n" + textoEstudios(),
@@ -1427,14 +1883,22 @@ public class CanalController {
                     .append(" ya se cerró porque no se pudo realizar el estudio. Puedo cotizarte otro estudio.");
         }
         sb.append("\n").append(listarOpcionesNumeradas(opcionesPara(tramite)));
+        sb.append("\nResponde con el nombre de la opción, con su número o con \"opcion 1\" / \"numero 2\".");
         return new ResultadoBot(sb.toString(), true, opcionesPara(tramite), tramite);
     }
 
-    /** Entrada no reconocida: lo dice claro, muestra el estado y las opciones válidas ahora. Nunca inventa un avance. */
+    /** Entrada no reconocida: lo dice claro (esa opción no existe en
+     * este paso), muestra el estado y las opciones válidas ahora, con
+     * el número de cada una. Nunca inventa un avance. El mensaje queda
+     * en el log como mensaje.no_entendido con el texto crudo. */
     private ResultadoBot noEntendi(Paciente paciente, Tramite tramite, String mensajeCrudo) {
         List<String> opciones = opcionesPara(tramite);
-        String texto = "No entendí \"" + mensajeCrudo.trim() + "\". " + resumenEstado(paciente, tramite)
-                + "\nAhora puedes:\n" + listarOpcionesNumeradas(opciones);
+        String crudo = mensajeCrudo == null ? "" : mensajeCrudo.trim();
+        eventos.registrar(tramite.getId(), TipoEvento.MENSAJE_NO_ENTENDIDO, "WHATSAPP", "PACIENTE",
+                "{\"mensaje\":\"" + escapar(crudo) + "\"}");
+        String texto = "No entendí \"" + crudo + "\": esa opción no existe en este paso. " + resumenEstado(paciente, tramite)
+                + "\nAhora puedes:\n" + listarOpcionesNumeradas(opciones)
+                + "\nResponde con el nombre de la opción, con su número (1, 2, 3) o con \"opcion 1\" / \"numero 2\".";
         return new ResultadoBot(texto, false, opciones, tramite);
     }
 
@@ -1524,9 +1988,14 @@ public class CanalController {
     }
 
     private List<String> opcionesEstudios() {
-        return estudios.findAll().stream()
-                .map(e -> e.getNombre() + " $" + e.getPrecio().toPlainString())
-                .toList();
+        List<Estudio> lista = estudios.findAll();
+        List<String> opciones = new ArrayList<>();
+        for (int i = 0; i < lista.size(); i++) {
+            // Numeradas como las clínicas ("1 · ..."): así "opcion 1" /
+            // "numero 2" y un número solo eligen el estudio N.
+            opciones.add((i + 1) + " · " + lista.get(i).getNombre() + " $" + lista.get(i).getPrecio().toPlainString());
+        }
+        return opciones;
     }
 
     private String listarClinicasTexto(String nombre, Tramite tramite) {
@@ -1545,10 +2014,11 @@ public class CanalController {
     private String textoEstudios() {
         List<Estudio> lista = estudios.findAll();
         StringBuilder sb = new StringBuilder("Estos son nuestros estudios:\n");
-        for (Estudio e : lista) {
-            sb.append("- ").append(e.getNombre()).append(" — $").append(e.getPrecio().toPlainString()).append("\n");
+        for (int i = 0; i < lista.size(); i++) {
+            Estudio e = lista.get(i);
+            sb.append(i + 1).append(") ").append(e.getNombre()).append(" — $").append(e.getPrecio().toPlainString()).append("\n");
         }
-        sb.append("Dime cuál necesitas.");
+        sb.append("Dime cuál necesitas (por ejemplo \"opcion 1\" o el nombre del estudio).");
         return sb.toString();
     }
 
@@ -1584,7 +2054,14 @@ public class CanalController {
                 || norm.contains("que folios tengo") || norm.contains("que tramites tengo")
                 || norm.contains("todos mis folios") || norm.contains("todos mis tramites")
                 || norm.equals("seguimiento") || norm.contains("dar seguimiento")
-                || norm.contains("seguimiento de mis folios") || norm.contains("seguir mis folios");
+                || norm.contains("seguimiento de mis folios") || norm.contains("seguir mis folios")
+                || norm.contains("mis pendientes") || norm.contains("mi agenda") || norm.contains("agendad")
+                || norm.contains("cotizaciones") || norm.contains("mi lista") || norm.contains("pendiente")
+                || norm.contains("mis citas") || norm.contains("mis reservaciones") || norm.contains("mis reservas")
+                || norm.contains("mis estudios") || norm.contains("ver mi agenda")
+                || norm.contains("que tengo agendado") || norm.contains("que tengo pendiente")
+                || norm.contains("lista de citas") || norm.contains("ver mis citas")
+                || norm.equals("agenda");
     }
 
     /**
@@ -1605,7 +2082,11 @@ public class CanalController {
                 || pareceFechaHora(texto) || pareceFecha(texto)) return false;
         if (norm.contains("cambiar") || norm.contains("reprogramar") || norm.contains("mover mi cita")
                 || norm.contains("otro estudio") || norm.contains("nuevo estudio")
-                || norm.contains("otro tramite") || norm.contains("nuevo tramite")) return false;
+                || norm.contains("otro tramite") || norm.contains("nuevo tramite")
+                || norm.contains("otra cita") || norm.contains("nueva cita")
+                || norm.contains("agendar") || norm.contains("reservar")
+                || norm.contains("nueva reservacion") || norm.contains("nueva reserva")
+                || norm.contains("quiero una cita")) return false;
         // Nombra un estudio concreto sin pedir continuar/verlo: es
         // cotizar ese estudio, no consultar el trámite.
         if (elegirEstudio(norm).isPresent()
@@ -1666,27 +2147,35 @@ public class CanalController {
         return respuesta;
     }
 
-    /** Volver / cambiar de folio: olvida el contexto y lista los folios para elegir otro. "cambiar clínica" y "otro estudio" NO son volver. */
+    /** Volver / cambiar de folio: olvida el contexto y lista los folios para elegir otro. "cambiar clínica" y "otro estudio" NO son volver; "regresar" / "atrás" tampoco (eso es un nivel atrás, se resuelve antes). */
     private boolean esVolver(String norm) {
         if (norm.contains("otro estudio") || norm.contains("cambiar clinica") || norm.contains("cambiar la clinica")) return false;
         if (norm.contains("cambiar de folio") || norm.contains("cambiar folio")
                 || norm.contains("otro folio") || norm.contains("elegir otro")
                 || norm.contains("otro tramite") || norm.contains("salir de este folio")
                 || norm.contains("salir del folio") || norm.contains("cambiar de tramite")) return true;
-        return Pattern.compile("\\b(volver|regresar|atras)\\b").matcher(norm).find();
+        return Pattern.compile("\\bvolver\\b").matcher(norm).find();
+    }
+
+    /** "volver al inicio" / "volver al menú" / "ir al menú" / "menú": menú principal con la CURP recordada (nunca se olvida la CURP). */
+    private boolean esVolverAlMenu(String norm) {
+        return norm.contains("volver al inicio") || norm.contains("volver al menu")
+                || norm.contains("regresar al inicio") || norm.contains("regresar al menu")
+                || norm.contains("ir al inicio") || norm.contains("ir al menu")
+                || norm.equals("menu") || norm.equals("menu principal") || norm.contains("menu principal");
+    }
+
+    /** "regresar" / "atrás" / "un paso atrás": un nivel atrás (no cambiar de folio: eso es "volver"). */
+    private boolean esRegresarNivel(String norm) {
+        if (norm.contains("cambiar de folio") || norm.contains("otro folio")) return false;
+        return norm.contains("regresar") || norm.contains("atras") || norm.contains("paso anterior")
+                || norm.contains("volver atras");
     }
 
     /** El usuario quiere olvidar la CURP recordada y empezar de cero (o cambiar de paciente). */
     private boolean esCambiarCurp(String norm) {
         return norm.contains("cambiar de curp") || norm.contains("otra curp") || norm.contains("cambiar de paciente")
                 || norm.contains("olvidar mi curp") || norm.contains("olvidar la curp");
-    }
-
-    /** "volver" / "regresar" / "atrás" a secas: volver al inicio. Con folio en contexto es otra cosa (lista folios). */
-    private boolean esVolverSolo(String norm) {
-        String t = norm.trim();
-        return t.equals("volver") || t.equals("regresar") || t.equals("atras")
-                || t.equals("volver al inicio") || t.equals("volver al menu") || t.equals("regresar al inicio");
     }
 
     /**
@@ -1713,19 +2202,33 @@ public class CanalController {
         return true;
     }
 
-    /** Petición explícita de un trámite nuevo (botón "Iniciar un trámite nuevo" u equivalente). */
+    /** Petición explícita de un trámite nuevo (botón "Iniciar un trámite nuevo" u equivalente).
+     * "nuevo" es la señal distintiva de CREAR: "quiero un nuevo tramite/estudio",
+     * "quiero reservar/agendar (un estudio/una cita)", "otra cita". "continuar/seguir"
+     * es retomar el activo (esConsultarTramite) y nunca llega aquí. */
     private boolean esNuevoTramiteExplicito(String norm) {
         return norm.contains("iniciar un tramite nuevo") || norm.contains("tramite nuevo")
                 || norm.contains("nuevo tramite") || norm.contains("iniciar tramite")
                 || norm.contains("nueva reservacion") || norm.contains("hacer una reservacion")
                 || norm.contains("quiero reservar") || norm.contains("reservar un estudio")
-                || norm.contains("empezar un tramite");
+                || norm.contains("empezar un tramite")
+                || norm.contains("nuevo estudio") || norm.contains("otro estudio")
+                || norm.contains("quiero un estudio nuevo") || norm.contains("empezar un estudio")
+                || norm.contains("quiero agendar") || norm.contains("agendar un estudio")
+                || norm.contains("agendar una cita") || norm.contains("quiero una cita")
+                || norm.contains("nueva cita") || norm.contains("otra cita")
+                || norm.contains("reservar") || norm.contains("quiero una reservacion")
+                || norm.contains("nueva reserva") || norm.contains("hacer una reserva")
+                || norm.contains("quiero una reserva");
     }
 
     /** Cotización genérica ("quiero cotizar", "quiero un estudio") sin estudio concreto. */
     private boolean esCotizacionGenerica(String norm) {
         return norm.contains("quiero cotizar") || norm.contains("quiero un estudio")
-                || norm.contains("necesito un estudio") || norm.equals("cotizar");
+                || norm.contains("necesito un estudio") || norm.equals("cotizar")
+                || norm.contains("quiero un estudio nuevo") || norm.contains("necesito otro estudio")
+                || norm.contains("quiero otro estudio") || norm.contains("quiero agendar")
+                || norm.contains("quiero una cita") || norm.contains("agendar");
     }
 
     /** Afirmación ("sí", "confirmo", "dale", "va", "de acuerdo", "ok", "vale", "claro"): nunca es un "no entendí"; lo que hace depende del estado. */
@@ -1759,7 +2262,9 @@ public class CanalController {
     private boolean quiereCotizar(String norm) {
         return norm.contains("cotizar") || norm.contains("cotizacion") || norm.contains("quiero un estudio")
                 || norm.contains("quiero cotizar") || norm.contains("empezar") || norm.contains("nuevo tramite")
-                || norm.contains("otro estudio") || norm.contains("necesito un estudio") || norm.contains("estudio");
+                || norm.contains("otro estudio") || norm.contains("necesito un estudio") || norm.contains("estudio")
+                || norm.contains("agendar") || norm.contains("reservar") || norm.contains("nueva cita")
+                || norm.contains("otra cita") || norm.contains("nuevo estudio");
     }
 
     /**
@@ -1790,7 +2295,7 @@ public class CanalController {
         }
         for (Clinica c : lista) {
             String n = normalizar(c.getNombre());
-            if (norm.contains(n) || (norm.length() > 4 && n.contains(norm))) {
+            if (norm.contains(n) || (norm.length() > 4 && n.contains(norm)) || coincidePorPrefijo(norm, n)) {
                 return Optional.of(c);
             }
         }
@@ -1801,6 +2306,10 @@ public class CanalController {
         for (Estudio e : estudios.findAll()) {
             String n = normalizar(e.getNombre());
             if (!n.isBlank() && norm.contains(n)) return Optional.of(e);
+            // Tolerancia a errores de dedo / nombres recortados ("ultra",
+            // "mast", "radi"): una palabra del mensaje que sea prefijo de
+            // una palabra del nombre del estudio (o al revés).
+            if (!n.isBlank() && coincidePorPrefijo(norm, n)) return Optional.of(e);
             if (norm.contains("ultrasonido") && n.contains("ultrasonido")) return Optional.of(e);
             if ((norm.contains("tiroideo") || norm.contains("tiroides")) && n.contains("tiroideo")) return Optional.of(e);
             if ((norm.contains("tsh") || norm.contains("t3") || norm.contains("t4")) && n.contains("tiroideo")) return Optional.of(e);
@@ -1815,7 +2324,7 @@ public class CanalController {
     private static String normalizar(String s) {
         if (s == null) return "";
         String sinAcentos = Normalizer.normalize(s, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
-        return sinAcentos.toLowerCase().trim();
+        return sinAcentos.toLowerCase().trim().replaceAll("\\s+", " ");
     }
 
     private String escapar(String texto) {
