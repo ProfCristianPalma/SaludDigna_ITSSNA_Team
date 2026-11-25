@@ -17,10 +17,33 @@ export function formatearFecha(iso: string | null | undefined): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
-/** "2026-11-24T10:00:00" -> "24/11/2026 10:00". Sin hora, solo la fecha. */
+/** "2026-11-24T10:00:00" -> "24/11/2026 10:00". Sin hora, solo la fecha.
+ * Si el texto trae zona horaria (una "Z" o un offset ±HH:MM, como los
+ * timestamps Instant del timeline: "2026-11-25T03:24:00Z"), se convierte
+ * a hora de America/Mexico_City: antes se recortaba el texto tal cual y
+ * el timeline mostraba la hora UTC (+6h: 03:24 en vez de 21:24).
+ * Sin zona (LocalDateTime de fechaCita, "2026-11-25T13:00:00") se
+ * conserva el recorte directo: esa hora ya es local de la clínica. */
 export function formatearFechaHora(iso: string | null | undefined): string {
   if (!iso) return '';
   const texto = iso.trim();
+  if (/([Zz]|[+-]\d{2}:?\d{2})$/.test(texto)) {
+    const fecha = new Date(texto);
+    if (!Number.isNaN(fecha.getTime())) {
+      const partes = new Intl.DateTimeFormat('es-MX', {
+        timeZone: 'America/Mexico_City',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(fecha);
+      const valor = (tipo: Intl.DateTimeFormatPartTypes): string =>
+        partes.find((p) => p.type === tipo)?.value ?? '';
+      return `${valor('day')}/${valor('month')}/${valor('year')} ${valor('hour')}:${valor('minute')}`;
+    }
+  }
   const [fecha, hora] = texto.split('T');
   const fechaLatina = formatearFecha(fecha);
   if (!hora) {

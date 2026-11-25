@@ -273,7 +273,22 @@ public class TramiteService {
         return crearTramite(paciente.getId(), estudioId, canalOrigen);
     }
 
+    /**
+     * Canal real de la acción: el que se pasa, o el canal de origen del
+     * trámite si no viene. Los eventos del Journey llevan el canal
+     * donde OCURRIÓ cada paso, no el canal donde se inició el trámite
+     * (bug 2026-11-24: un trámite iniciado en WhatsApp y terminado en
+     * Web mostraba WHATSAPP en todos los pasos).
+     */
+    private static String canalReal(String canal, Tramite tramite) {
+        return canal == null || canal.isBlank() ? tramite.getCanalOrigen() : canal;
+    }
+
     public Tramite cotizar(UUID tramiteId, Long estudioId) {
+        return cotizar(tramiteId, estudioId, null);
+    }
+
+    public Tramite cotizar(UUID tramiteId, Long estudioId, String canal) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.INICIADO, EstadoTramite.DATOS_PENDIENTES);
         Estudio estudio = estudios.findById(estudioId)
@@ -287,7 +302,7 @@ public class TramiteService {
         tramite.setPrecioCotizado(estudio.getPrecio());
         tramite.setEstado(EstadoTramite.COTIZADO);
         tramite = tramites.save(tramite);
-        eventos.registrar(tramite.getId(), TipoEvento.COTIZACION_CREADA, tramite.getCanalOrigen(), "SISTEMA",
+        eventos.registrar(tramite.getId(), TipoEvento.COTIZACION_CREADA, canalReal(canal, tramite), "SISTEMA",
                 json(Map.of("estudioId", String.valueOf(estudio.getId()),
                         "estudio", estudio.getNombre(),
                         "precio", estudio.getPrecio().toPlainString())));
@@ -295,6 +310,10 @@ public class TramiteService {
     }
 
     public Tramite seleccionarClinica(UUID tramiteId, Long clinicaId) {
+        return seleccionarClinica(tramiteId, clinicaId, null);
+    }
+
+    public Tramite seleccionarClinica(UUID tramiteId, Long clinicaId, String canal) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.COTIZADO);
         Clinica clinica = clinicas.findById(clinicaId)
@@ -302,7 +321,7 @@ public class TramiteService {
         tramite.setClinicaId(clinica.getId());
         tramite.setEstado(EstadoTramite.CLINICA_SELECCIONADA);
         tramite = tramites.save(tramite);
-        eventos.registrar(tramite.getId(), TipoEvento.CLINICA_SELECCIONADA, tramite.getCanalOrigen(), "PACIENTE",
+        eventos.registrar(tramite.getId(), TipoEvento.CLINICA_SELECCIONADA, canalReal(canal, tramite), "PACIENTE",
                 json(Map.of("clinicaId", String.valueOf(clinica.getId()), "clinica", clinica.getNombre())));
         return tramite;
     }
@@ -314,12 +333,16 @@ public class TramiteService {
      * listo para elegir otra, sin crear un folio nuevo.
      */
     public Tramite volverACotizado(UUID tramiteId) {
+        return volverACotizado(tramiteId, null);
+    }
+
+    public Tramite volverACotizado(UUID tramiteId, String canal) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.CLINICA_SELECCIONADA);
         tramite.setClinicaId(null);
         tramite.setEstado(EstadoTramite.COTIZADO);
         tramite = tramites.save(tramite);
-        eventos.registrar(tramite.getId(), TipoEvento.CLINICA_SELECCIONADA, tramite.getCanalOrigen(), "PACIENTE",
+        eventos.registrar(tramite.getId(), TipoEvento.CLINICA_SELECCIONADA, canalReal(canal, tramite), "PACIENTE",
                 json(Map.of("accion", "cambiar_clinica")));
         return tramite;
     }
@@ -440,6 +463,10 @@ public class TramiteService {
     }
 
     public Tramite confirmar(UUID tramiteId, LocalDateTime fechaCita) {
+        return confirmar(tramiteId, fechaCita, null);
+    }
+
+    public Tramite confirmar(UUID tramiteId, LocalDateTime fechaCita, String canal) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.CLINICA_SELECCIONADA);
         if (fechaCita == null) {
@@ -494,7 +521,7 @@ public class TramiteService {
         } else {
             citas.save(new Cita(tramite, fechaCita, clinica, "CONFIRMADA"));
         }
-        eventos.registrar(tramite.getId(), TipoEvento.CITA_CONFIRMADA, tramite.getCanalOrigen(), "PACIENTE",
+        eventos.registrar(tramite.getId(), TipoEvento.CITA_CONFIRMADA, canalReal(canal, tramite), "PACIENTE",
                 json(Map.of("fechaCita", fechaCita.toString(), "clinica", clinica.getNombre())));
         return tramite;
     }
@@ -542,6 +569,10 @@ public class TramiteService {
      * DATOS_PENDIENTES vuelve a INICIADO para poder cotizar.
      */
     public Tramite completarDatoPendiente(UUID tramiteId, String clave, String valor) {
+        return completarDatoPendiente(tramiteId, clave, valor, null);
+    }
+
+    public Tramite completarDatoPendiente(UUID tramiteId, String clave, String valor, String canal) {
         Tramite tramite = buscar(tramiteId);
         exigirEstado(tramite, EstadoTramite.INICIADO, EstadoTramite.DATOS_PENDIENTES, EstadoTramite.COTIZADO);
         if (clave == null || clave.isBlank()) {
@@ -554,7 +585,7 @@ public class TramiteService {
             tramite.setEstado(EstadoTramite.INICIADO);
         }
         tramite = tramites.save(tramite);
-        eventos.registrar(tramite.getId(), TipoEvento.DATO_PENDIENTE_COMPLETADO, tramite.getCanalOrigen(), "PACIENTE",
+        eventos.registrar(tramite.getId(), TipoEvento.DATO_PENDIENTE_COMPLETADO, canalReal(canal, tramite), "PACIENTE",
                 json(Map.of("clave", clave, "pendientesRestantes", String.valueOf(pendientes.size()))));
         return tramite;
     }

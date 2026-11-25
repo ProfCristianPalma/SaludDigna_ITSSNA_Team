@@ -800,11 +800,13 @@ export async function atenderTramite(tramiteId: string): Promise<Tramite> {
   return normalizeTramite(raw);
 }
 
-/** Completa un dato pendiente en la BD (POST /tramites/{id}/completar-dato). */
-export async function completarDato(tramiteId: string, clave: string, valor: string): Promise<Tramite> {
+/** Completa un dato pendiente en la BD (POST /tramites/{id}/completar-dato).
+ * `canal` es el canal real donde se completó (CALL_CENTER desde Asesor):
+ * el evento dato.pendiente.completado lleva ese canal, no el de origen. */
+export async function completarDato(tramiteId: string, clave: string, valor: string, canal?: string): Promise<Tramite> {
   const raw = await fetchJson<Record<string, unknown>>(
     `/tramites/${encodeURIComponent(tramiteId)}/completar-dato`,
-    { method: 'POST', body: JSON.stringify({ clave, valor }) },
+    { method: 'POST', body: JSON.stringify({ clave, valor, ...(canal ? { canal } : {}) }) },
   );
   return normalizeTramite(raw);
 }
@@ -957,37 +959,39 @@ export async function crearTramite(input: CrearTramiteInput): Promise<Tramite> {
   }
 }
 
-export async function cotizar(tramiteId: string, estudioId: string): Promise<Tramite> {
+/** `canal` es el canal real donde se cotizó (WEB, APP, CALL_CENTER):
+ * el evento cotizacion.creada lleva ese canal, no el de origen del trámite. */
+export async function cotizar(tramiteId: string, estudioId: string, canal?: string): Promise<Tramite> {
   const raw = await fetchJson<Record<string, unknown>>(
     `/tramites/${encodeURIComponent(tramiteId)}/cotizar`,
     {
       method: 'POST',
-      body: JSON.stringify({ estudioId: toNumberId(estudioId) }),
+      body: JSON.stringify({ estudioId: toNumberId(estudioId), ...(canal ? { canal } : {}) }),
     },
     ESCRITURA_TIMEOUT_MS,
   );
   return normalizeTramite(raw);
 }
 
-export async function seleccionarClinica(tramiteId: string, clinicaId: string): Promise<Tramite> {
+export async function seleccionarClinica(tramiteId: string, clinicaId: string, canal?: string): Promise<Tramite> {
   // Backend: POST /tramites/{id}/seleccionar-clinica (no /clinica)
   const raw = await fetchJson<Record<string, unknown>>(
     `/tramites/${encodeURIComponent(tramiteId)}/seleccionar-clinica`,
     {
       method: 'POST',
-      body: JSON.stringify({ clinicaId: toNumberId(clinicaId) }),
+      body: JSON.stringify({ clinicaId: toNumberId(clinicaId), ...(canal ? { canal } : {}) }),
     },
     ESCRITURA_TIMEOUT_MS,
   );
   return normalizeTramite(raw);
 }
 
-export async function confirmar(tramiteId: string, fechaCita: string): Promise<Tramite> {
+export async function confirmar(tramiteId: string, fechaCita: string, canal?: string): Promise<Tramite> {
   const raw = await fetchJson<Record<string, unknown>>(
     `/tramites/${encodeURIComponent(tramiteId)}/confirmar`,
     {
       method: 'POST',
-      body: JSON.stringify({ fechaCita }),
+      body: JSON.stringify({ fechaCita, ...(canal ? { canal } : {}) }),
     },
     ESCRITURA_TIMEOUT_MS,
   );
@@ -1017,6 +1021,10 @@ export async function enviarWhatsapp(
   curp?: string;
   /** El usuario pidió olvidar la CURP: el front limpia su estado. */
   olvidarCurp?: boolean;
+  /** El bot volvió al menú o a elegir estudio: el front limpia el folio
+   * en contexto para que la siguiente respuesta no se lea contra el
+   * folio anterior (captura Eduardo, 2026-11-24). */
+  limpiarFolio?: boolean;
 }> {
   // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
   // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso, opciones, entendido } y,
@@ -1041,6 +1049,7 @@ export async function enviarWhatsapp(
     entendido: typeof raw.entendido === 'boolean' ? raw.entendido : undefined,
     curp: typeof raw.curp === 'string' && raw.curp ? raw.curp : undefined,
     olvidarCurp: raw.olvidarCurp === true ? true : undefined,
+    limpiarFolio: raw.limpiarFolio === true ? true : undefined,
   };
 }
 

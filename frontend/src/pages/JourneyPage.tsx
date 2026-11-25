@@ -36,6 +36,26 @@ const CANAL_ICON: Record<string, string> = {
   CLINICA: '🏥',
 };
 
+/**
+ * Canal del paso: el evento que marca ese paso hecho (no el canal de
+ * origen del trámite). Cada paso muestra el canal donde REALMENTE se
+ * hizo: un trámite iniciado en WhatsApp y terminado en Web muestra
+ * WHATSAPP en los primeros pasos y WEB en los últimos (2026-11-24:
+ * antes todos los eventos llevaban el canal de origen y el Journey
+ * solo decía WHATSAPP).
+ */
+const CANAL_POR_PASO: Record<EstadoTramite, string> = {
+  INICIADO: 'tramite.iniciado',
+  DATOS_PENDIENTES: 'dato.pendiente.completado',
+  COTIZADO: 'cotizacion.creada',
+  CLINICA_SELECCIONADA: 'clinica.seleccionada',
+  CONFIRMADO: 'cita.confirmada',
+  ATENDIDO: 'atencion.concluida',
+  NO_PRESENTADO: 'cita.no_presentado',
+  NO_REALIZADO: 'cita.no_realizado',
+  CANCELADO: 'tramite.iniciado',
+};
+
 export default function JourneyPage() {
   const { id } = useParams<{ id?: string }>();
   // Sin folio de ejemplo cargado: la búsqueda arranca vacía (o con el
@@ -155,6 +175,12 @@ export default function JourneyPage() {
   const timeline: Evento[] = journey?.timeline ?? [];
   const indiceActual = tramite ? PASOS.indexOf(tramite.estado) : -1;
   const canales = Array.from(new Set(timeline.map((e) => e.canal)));
+  /** Canal de cada paso, del evento que lo marcó (último evento de ese tipo). */
+  const canalPorPaso = (paso: EstadoTramite): string | null => {
+    const tipo = CANAL_POR_PASO[paso];
+    const ev = [...timeline].reverse().find((e) => e.tipo === tipo);
+    return ev ? ev.canal : null;
+  };
 
   return (
     <div>
@@ -219,6 +245,11 @@ export default function JourneyPage() {
                 <li key={paso} className={i <= indiceActual ? 'step step-done' : 'step'}>
                   <span className="step-dot" aria-hidden="true">{i < indiceActual ? '✓' : i + 1}</span>
                   <span>{paso === 'CLINICA_SELECCIONADA' && tramite?.clinica ? tramite.clinica.nombre : PASO_LABEL[paso]}</span>
+                  {i <= indiceActual && canalPorPaso(paso) && (
+                    <span className="chip" title={`Este paso se hizo por ${canalPorPaso(paso)}`}>
+                      {CANAL_ICON[canalPorPaso(paso) as string] ?? '•'} {canalPorPaso(paso)}
+                    </span>
+                  )}
                 </li>
               ))}
             </ol>

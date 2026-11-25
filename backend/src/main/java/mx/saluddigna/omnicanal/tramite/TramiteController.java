@@ -44,16 +44,22 @@ public class TramiteController {
                                       Long estudioId, String canalOrigen) {
     }
 
-    public record CotizarRequest(@NotNull Long estudioId) {
+    /**
+     * `canal` (opcional) es el canal REAL donde ocurrió la acción (WEB,
+     * APP, WHATSAPP, CALL_CENTER): el evento del Journey lleva ese
+     * canal, no el canal de origen del trámite. Sin canal, el servicio
+     * usa el de origen (compatibilidad con clientes viejos y seeds).
+     */
+    public record CotizarRequest(@NotNull Long estudioId, String canal) {
     }
 
-    public record SeleccionarClinicaRequest(@NotNull Long clinicaId) {
+    public record SeleccionarClinicaRequest(@NotNull Long clinicaId, String canal) {
     }
 
-    public record ConfirmarRequest(@NotNull LocalDateTime fechaCita) {
+    public record ConfirmarRequest(@NotNull LocalDateTime fechaCita, String canal) {
     }
 
-    public record CompletarDatoRequest(String clave, String valor) {
+    public record CompletarDatoRequest(String clave, String valor, String canal) {
     }
 
     public record RegistrarEventoRequest(String tipo, String canal, String actor, String payload) {
@@ -208,17 +214,17 @@ public class TramiteController {
 
     @PostMapping("/tramites/{id}/cotizar")
     public Tramite cotizar(@PathVariable UUID id, @Valid @RequestBody CotizarRequest req) {
-        return service.cotizar(id, req.estudioId());
+        return service.cotizar(id, req.estudioId(), req.canal());
     }
 
     @PostMapping("/tramites/{id}/seleccionar-clinica")
     public Tramite seleccionarClinica(@PathVariable UUID id, @Valid @RequestBody SeleccionarClinicaRequest req) {
-        return service.seleccionarClinica(id, req.clinicaId());
+        return service.seleccionarClinica(id, req.clinicaId(), req.canal());
     }
 
     @PostMapping("/tramites/{id}/confirmar")
     public Tramite confirmar(@PathVariable UUID id, @Valid @RequestBody ConfirmarRequest req) {
-        return service.confirmar(id, req.fechaCita());
+        return service.confirmar(id, req.fechaCita(), req.canal());
     }
 
     /** Clínica: marca la atención como concluida (CONFIRMADO → ATENDIDO) y actualiza la cita. */
@@ -250,7 +256,7 @@ public class TramiteController {
 
     @PostMapping("/tramites/{id}/completar-dato")
     public Tramite completarDato(@PathVariable UUID id, @RequestBody CompletarDatoRequest req) {
-        return service.completarDatoPendiente(id, req.clave(), req.valor());
+        return service.completarDatoPendiente(id, req.clave(), req.valor(), req.canal());
     }
 
     @GetMapping("/tramites/{id}/timeline")

@@ -182,7 +182,7 @@ function ContenidoAsesor() {
     setGuardando(true);
     try {
       // Se guarda en la BD (POST /tramites/{id}/completar-dato) y se recarga.
-      const actualizado = await completarDato(tramite.id, dato, 'completado por asesor');
+      const actualizado = await completarDato(tramite.id, dato, 'completado por asesor', 'CALL_CENTER');
       setTramite(actualizado);
       setTimeline(await getTimeline(actualizado.id));
       setTramites((prev) => prev.map((t) => (t.id === actualizado.id ? actualizado : t)));
@@ -313,7 +313,7 @@ function ContenidoAsesor() {
         estudioId: resEstudioId,
         canal: 'CALL_CENTER',
       });
-      const cotizado = await cotizar(creado.id, resEstudioId);
+      const cotizado = await cotizar(creado.id, resEstudioId, 'CALL_CENTER');
       setResTramite(cotizado);
       setResMensaje(`Reservación creada. Folio ${cotizado.folio}. Ahora elige la clínica.`);
     } catch (err) {
@@ -360,7 +360,7 @@ function ContenidoAsesor() {
     if (!resTramite || !resClinicaId) return;
     setResCargando(true);
     try {
-      const actualizado = await seleccionarClinica(resTramite.id, resClinicaId);
+      const actualizado = await seleccionarClinica(resTramite.id, resClinicaId, 'CALL_CENTER');
       setResTramite(actualizado);
       setResMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}. Ahora elige fecha y hora.`);
     } catch (err) {
@@ -382,7 +382,7 @@ function ContenidoAsesor() {
       // La parrilla ya bloquea las horas ocupadas en pantalla; el 409
       // del backend sigue siendo la última palabra y su mensaje (con
       // las horas libres cercanas) se muestra tal cual.
-      const confirmado = await confirmar(resTramite.id, fechaHoraISO);
+      const confirmado = await confirmar(resTramite.id, fechaHoraISO, 'CALL_CENTER');
       setResTramite(confirmado);
       setResMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,

@@ -162,7 +162,7 @@ export default function WebPage() {
         estudioId,
         canal: 'WEB',
       });
-      const cotizado = await cotizar(creado.id, estudioId);
+      const cotizado = await cotizar(creado.id, estudioId, 'WEB');
       setTramite(cotizado);
       // Reservación nueva: la clínica, la fecha y la hora se eligen de
       // cero (no arrastrar las de la reservación anterior).
@@ -220,7 +220,7 @@ export default function WebPage() {
           // El folio se creó pero el paso de cotizar no llegó a
           // confirmarse en el front: se reintenta una vez (timeout largo).
           try {
-            nuevo = await cotizar(nuevo.id, estudioId);
+            nuevo = await cotizar(nuevo.id, estudioId, 'WEB');
           } catch {
             // Se queda el folio creado sin cotizar; se muestra igual.
           }
@@ -253,7 +253,7 @@ export default function WebPage() {
     if (!tramite || !clinicaEfectivaId) return;
     setCargando(true);
     try {
-      const actualizado = await seleccionarClinica(tramite.id, clinicaEfectivaId);
+      const actualizado = await seleccionarClinica(tramite.id, clinicaEfectivaId, 'WEB');
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
       await cargarFolios(sesionPaciente?.id, curpEfectiva);
@@ -277,11 +277,11 @@ export default function WebPage() {
       // CLINICA_SELECCIONADA y rechazaría la reservación.
       let tramiteActual = tramite;
       if (tramite.estado === 'COTIZADO' && clinicaEfectivaId) {
-        tramiteActual = await seleccionarClinica(tramite.id, clinicaEfectivaId);
+        tramiteActual = await seleccionarClinica(tramite.id, clinicaEfectivaId, 'WEB');
         setTramite(tramiteActual);
       }
       const fechaHoraISO = `${fechaISO}T${hora}:00`;
-      const confirmado = await confirmar(tramiteActual.id, fechaHoraISO);
+      const confirmado = await confirmar(tramiteActual.id, fechaHoraISO, 'WEB');
       setTramite(confirmado);
       setMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,

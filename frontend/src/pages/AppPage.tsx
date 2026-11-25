@@ -201,7 +201,7 @@ export default function AppPage() {
         estudioId,
         canal: 'APP',
       });
-      const cotizado = await cotizar(creado.id, estudioId);
+      const cotizado = await cotizar(creado.id, estudioId, 'APP');
       retomarEnPanel(cotizado);
       setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
       await recargarFolios();
@@ -247,7 +247,7 @@ export default function AppPage() {
           // El folio se creó pero el paso de cotizar no llegó a
           // confirmarse en el front: se reintenta una vez (timeout largo).
           try {
-            nuevo = await cotizar(nuevo.id, estudioId);
+            nuevo = await cotizar(nuevo.id, estudioId, 'APP');
           } catch {
             // Se queda el folio creado sin cotizar; se muestra igual.
           }
@@ -275,7 +275,7 @@ export default function AppPage() {
     if (!tramite || !clinicaEfectivaId) return;
     setReservando(true);
     try {
-      const actualizado = await seleccionarClinica(tramite.id, clinicaEfectivaId);
+      const actualizado = await seleccionarClinica(tramite.id, clinicaEfectivaId, 'APP');
       setTramite(actualizado);
       setMensaje(`Clínica seleccionada: ${actualizado.clinica?.nombre ?? ''}.`);
       await recargarFolios();
@@ -299,11 +299,11 @@ export default function AppPage() {
       // CLINICA_SELECCIONADA y rechazaría la reservación.
       let tramiteActual = tramite;
       if (tramite.estado === 'COTIZADO' && clinicaEfectivaId) {
-        tramiteActual = await seleccionarClinica(tramite.id, clinicaEfectivaId);
+        tramiteActual = await seleccionarClinica(tramite.id, clinicaEfectivaId, 'APP');
         setTramite(tramiteActual);
       }
       const fechaHoraISO = `${fechaISO}T${hora}:00`;
-      const confirmado = await confirmar(tramiteActual.id, fechaHoraISO);
+      const confirmado = await confirmar(tramiteActual.id, fechaHoraISO, 'APP');
       setTramite(confirmado);
       setMensaje(
         `Reservación confirmada para el ${formatearFechaHora(confirmado.fechaCita)}. Folio ${confirmado.folio}.`,

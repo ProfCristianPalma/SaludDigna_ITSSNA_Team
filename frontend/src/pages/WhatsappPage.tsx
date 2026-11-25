@@ -75,6 +75,14 @@ export default function WhatsappPage() {
         // mensajes siguientes, venga del campo o del mensaje.
         setIdentificador(res.curp);
       }
+      if (res.limpiarFolio) {
+        // El bot volvió al menú o a elegir estudio: no se sigue ningún
+        // folio, así que la siguiente respuesta ("2", un estudio...) no
+        // debe leerse contra el folio anterior (captura Eduardo,
+        // 2026-11-24). Va antes de `res.tramite`, que aquí es null.
+        setFolioActivo(null);
+        setTramite(null);
+      }
       if (res.tramite) {
         setTramite(res.tramite);
         setFolioActivo(res.tramite.folio);
