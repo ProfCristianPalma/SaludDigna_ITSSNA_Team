@@ -72,6 +72,13 @@ export default function LoginPage() {
           </button>
         </form>
         <p className="muted" style={{ marginTop: 12 }}>
+          ¿No te sabes tu CURP?{' '}
+          <a href="https://www.gob.mx/curp/" target="_blank" rel="noopener noreferrer">
+            Consúltala aquí
+          </a>{' '}
+          (se abre en una pestaña nueva, sin cerrar este inicio de sesión).
+        </p>
+        <p className="muted">
           ¿No tienes cuenta? <Link to="/registro">Regístrate aquí</Link>.
         </p>
         <p className="muted">

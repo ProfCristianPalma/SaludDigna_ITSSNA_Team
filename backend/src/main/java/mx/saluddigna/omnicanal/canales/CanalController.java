@@ -2331,33 +2331,65 @@ public class CanalController {
      * "la segunda", "tehuacan", "la de tehuacan", "quiero la de Puebla"
      * y el nombre de la clínica. Por número se usa el orden del catálogo.
      */
+    /**
+     * Elige una clínica por lo que escribió el usuario (número, ordinal o
+     * nombre). NUNCA elige una por defecto: si el mensaje no nombra una
+     * clínica de forma explícita, vacío (el bot lista las clínicas o dice
+     * "no entendí"). Bug 2026-11-24: la versión anterior hacía
+     * `n.contains(norm)`, así que escribir solo "clínica" (palabra que
+     * está en el nombre de todas las clínicas) elegía la primera de la
+     * lista, Puebla, sin que el usuario la hubiera elegido; y los
+     * `.or(() -> lista.get(0))` hacían lo mismo cuando el nombre no se
+     * encontraba. Solo cuentan las palabras distintivas (puebla, centro,
+     * tehuacan, juarez): las genéricas ("clínica", "salud", "digna") no
+     * eligen ninguna.
+     */
     private Optional<Clinica> elegirClinica(String norm) {
         List<Clinica> lista = clinicas.findAll();
         if (lista.isEmpty()) return Optional.empty();
         String token = norm.trim();
+        // Por número u ordinal: elección explícita del usuario.
         if (token.equals("1") || token.equals("uno") || norm.contains("primera")
                 || norm.contains("la 1") || norm.contains("la uno")) {
             return Optional.of(lista.get(0));
         }
         if (token.equals("2") || token.equals("dos") || norm.contains("segunda")
                 || norm.contains("la 2") || norm.contains("la dos")) {
-            return Optional.of(lista.size() > 1 ? lista.get(1) : lista.get(0));
+            return lista.size() > 1 ? Optional.of(lista.get(1)) : Optional.empty();
         }
-        if (norm.contains("puebla") || norm.contains("centro") || norm.contains("juarez")) {
-            return lista.stream().filter(c -> normalizar(c.getNombre()).contains("puebla")).findFirst()
-                    .or(() -> Optional.of(lista.get(0)));
-        }
-        if (norm.contains("tehuacan")) {
-            return lista.stream().filter(c -> normalizar(c.getNombre()).contains("tehuacan")).findFirst()
-                    .or(() -> lista.size() > 1 ? Optional.of(lista.get(1)) : Optional.of(lista.get(0)));
+        // "Juárez" es la Av. Juárez de Puebla Centro (dirección, no nombre).
+        if (norm.contains("juarez")) {
+            return lista.stream()
+                    .filter(c -> normalizar(c.getDireccion() == null ? "" : c.getDireccion()).contains("juarez"))
+                    .findFirst();
         }
         for (Clinica c : lista) {
             String n = normalizar(c.getNombre());
-            if (norm.contains(n) || (norm.length() > 4 && n.contains(norm)) || coincidePorPrefijo(norm, n)) {
-                return Optional.of(c);
+            if (n.isBlank()) continue;
+            // Nombre completo ("clinica puebla centro"): elección explícita.
+            if (norm.contains(n)) return Optional.of(c);
+            // Palabra distintiva del nombre o la ciudad ("pueb", "tehu",
+            // "centro"): una palabra del mensaje (≥4 letras) que sea
+            // prefijo de una palabra distintiva, o al revés. Las
+            // genéricas no cuentan (ver comentario del método).
+            String distintivas = n + " " + normalizar(c.getCiudad() == null ? "" : c.getCiudad());
+            for (String palabra : norm.split("\\s+")) {
+                if (palabra.length() < 4) continue;
+                for (String parte : distintivas.split("\\s+")) {
+                    if (parte.length() < 4 || esPalabraGenericaClinica(parte)) continue;
+                    if (parte.startsWith(palabra) || palabra.startsWith(parte)) return Optional.of(c);
+                }
             }
         }
         return Optional.empty();
+    }
+
+    /** Palabras que están en los nombres de las clínicas y por eso no
+     * distinguen a ninguna: escribirlas no es elegir clínica. */
+    private static boolean esPalabraGenericaClinica(String palabra) {
+        return palabra.equals("clinica") || palabra.equals("salud") || palabra.equals("digna")
+                || palabra.equals("de") || palabra.equals("la") || palabra.equals("el")
+                || palabra.equals("los") || palabra.equals("las");
     }
 
     private Optional<Estudio> elegirEstudio(String norm) {

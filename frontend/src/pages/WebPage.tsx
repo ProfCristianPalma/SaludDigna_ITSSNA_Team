@@ -69,7 +69,8 @@ export default function WebPage() {
   useEffect(() => {
     getEstudios().then((list) => {
       setEstudios(list);
-      if (list.length > 0) setEstudioId(list[0].id);
+      // Sin estudio pre-seleccionado: el estudio lo elige el paciente
+      // siempre (como la clínica); nada viene asignado por defecto.
     });
     getClinicas().then(setClinicas);
     const guardado = window.sessionStorage.getItem(FOLIO_KEY);
@@ -354,6 +355,7 @@ export default function WebPage() {
             <label>
               Estudio
               <select value={estudioId} onChange={(e) => setEstudioId(e.target.value)}>
+                <option value="">Selecciona un estudio</option>
                 {estudios.map((est) => (
                   <option key={est.id} value={est.id}>
                     {est.nombre} — ${est.precio}
@@ -366,7 +368,7 @@ export default function WebPage() {
                 Precio: <strong>${estudioSeleccionado.precio}</strong>
               </p>
             )}
-            <button type="submit" className="btn btn-primary" disabled={cargando}>
+            <button type="submit" className="btn btn-primary" disabled={cargando || !estudioId}>
               {cargando ? 'Reservando…' : 'Reservación'}
             </button>
           </form>

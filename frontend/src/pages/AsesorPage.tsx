@@ -79,7 +79,8 @@ function ContenidoAsesor() {
   useEffect(() => {
     getEstudios().then((list) => {
       setEstudios(list);
-      if (list.length > 0) setResEstudioId(list[0].id);
+      // Sin estudio pre-seleccionado: el estudio lo elige el asesor
+      // siempre (como la clínica); nada viene asignado por defecto.
     });
     getClinicas().then(setClinicas);
   }, []);
@@ -569,6 +570,7 @@ function ContenidoAsesor() {
               <label>
                 Estudio
                 <select value={resEstudioId} onChange={(e) => setResEstudioId(e.target.value)}>
+                  <option value="">Selecciona un estudio</option>
                   {estudios.map((est) => (
                     <option key={est.id} value={est.id}>
                       {est.nombre} — ${est.precio}
@@ -580,7 +582,7 @@ function ContenidoAsesor() {
                 type="button"
                 className="btn btn-primary"
                 onClick={() => void handleCrearReservacion()}
-                disabled={resCargando || !!resTramite}
+                disabled={resCargando || !!resTramite || !resEstudioId}
               >
                 Crear reservación
               </button>
