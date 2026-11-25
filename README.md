@@ -1,9 +1,9 @@
 # Salud Digna Omnicanal — Un paciente, una sola conversación
 
 Plataforma de atención omnicanal para el reto de software inteligente de
-Salud Digna (HackaTec Nacional 2026): un paciente mantiene **un solo
-contexto y una sola conversación** aunque cambie de canal. Web, App,
-WhatsApp, Call Center y Clínica trabajan sobre la misma API, la misma
+Salud Digna (HackaTec Nacional 2026): un paciente mantiene "un solo
+contexto y una sola conversación" aunque cambie de canal. Web, App,
+WhatsApp y Call Center trabajan sobre la misma API, la misma
 base de datos y el mismo registro de eventos, así que el paciente nunca
 repite su historia y cada paso queda trazado.
 
@@ -19,14 +19,11 @@ folio legible (`SD-2026-XXXX`) como llave de continuidad entre canales.
 
 - **Repositorio:** https://github.com/ProfCristianPalma/SaludDigna_ITSSNA_Team.git
 - **Rama a evaluar:** `main`
-- **Código evaluado:** commit `b46b7e8` (25 de noviembre de 2026). Esta
-  entrega solo reescribe la documentación y elimina los archivos
-  listados en [Limpieza](#limpieza-de-documentación), sin cambiar el
-  comportamiento de la aplicación.
+- **Código evaluado:** commit `b46b7e8` (25 de noviembre de 2026).
 
 ## Instalación paso a paso (para replicar el demo en su equipo)
 
-Todo corre en Docker: **no hay "en mi equipo sí funciona"** porque el
+Todo corre en Docker: **no hay "en mi equipo sí funciona" como excusa** porque el
 equipo evaluador corre exactamente las mismas imágenes y el mismo
 código. No hace falta instalar Java, Maven ni Node en la PC: Docker
 los lleva dentro de los contenedores.
@@ -218,7 +215,7 @@ con check-in y "Registrar atención".
 Esto es lo que hay en la base recién sembrada, antes de tocar nada.
 Las citas son **relativas al día del primer arranque** (día +1 = mañana,
 día +2, etc.), así que el demo funciona cualquier día, no solo el día
-del cierre.
+de ejecución.
 
 ### Estudios (6) y clínicas (2)
 
@@ -246,10 +243,10 @@ del cierre.
 | Carlos Mendoza Vega | **ATENDIDO** | Análisis sangre $380, cita mañana 09:00 en Puebla (su hueco vuelve a estar libre) |
 | Fernanda López Díaz | **DATOS_PENDIENTES** | Sin estudio todavía; pendientes: CURP y orden médica |
 
-### Los otros 15 pacientes (citas CONFIRMADAS que ocupan la parrilla)
+### Los otros 15 pacientes (citas CONFIRMADAS que ocupan el calendario de citas con fecha y hora)
 
 Cada uno tiene una cita confirmada en día y hora distintos, en las dos
-clínicas. Esas horas salen **deshabilitadas** en la parrilla y
+clínicas. Esas horas salen **deshabilitadas** en el calendario/horario, y
 `confirmar` las rechaza con 409 si se intentan tomar. Al día siguiente
 del primer arranque (**día +1**) hay 6 citas: María 10:00 Tehuacán,
 Jorge 08:00 Puebla, Sofía 09:30 Puebla, Diego 08:30 Tehuacán, Valeria
@@ -275,7 +272,7 @@ Eduardo (+5).
 - **Fechas en formato latinoamericano:** todo lo que ve, escribe o
   recibe el usuario es **DD/MM/AAAA** (la cita se muestra como
   `25/11/2026 10:00`). Por dentro, la API y Postgres guardan ISO.
-- **Parrilla de horarios:** slots de 30 minutos, 07:00–16:30. Una cita
+- **Agenda de horarios:** slots de 30 minutos, 07:00–16:30. Una cita
   CONFIRMADA ocupa su intervalo (según la duración del estudio); un
   hueco que ya pasó hoy no se puede reservar.
 
@@ -403,7 +400,8 @@ check-in en la cita de Ana y pulsar "Registrar atención".
 **Resultado esperado:** el folio pasa a **ATENDIDO** de verdad en la
 base y desaparece de la lista de confirmados al recargar.
 
-### Paso 9 — Doctor (`/doctor`)
+### Paso 9 — Doctor (`/doctor`) NOTA: Se comenzo a trabajar la sección,
+### pero no se termino por completo, puesto que no es parte del reto
 
 Entrar como `doctor` / `doctor123` (Alejandro Ruiz).
 **Resultado esperado:** las citas CONFIRMADAS del día, con check-in
@@ -522,17 +520,6 @@ SaludDigna_ITSSNA_Team/
 └── docs/
     └── arquitectura.md        Diagramas Mermaid (flujo, modelo, secuencia)
 ```
-
-### Limpieza de documentación
-
-En esta entrega se eliminaron del repositorio los READMEs dispersos
-(`backend/README.md`, `frontend/README.md`), la guía de Docker para el
-equipo (`GUIA_DOCKER_EQUIPO.md`) y el PDF del reto
-(`Reto Software Inteligente - SALUD DIGNA.pdf`): **toda la
-documentación vive ahora en este README**. Los Dockerfiles y
-`docker-compose.yml` no referenciaban ninguno de esos archivos, así
-que no hizo falta tocarlos (los contextos de build son `./backend` y
-`./frontend`, y el PDF estaba en la raíz).
 
 ## Endpoints principales
 
