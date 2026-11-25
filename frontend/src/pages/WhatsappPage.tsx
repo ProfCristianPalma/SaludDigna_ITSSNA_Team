@@ -29,6 +29,12 @@ export default function WhatsappPage() {
   // Folio en contexto: se manda con CADA mensaje para que el bot no
   // tenga que adivinar con cuál de tus folios seguir.
   const [folioActivo, setFolioActivo] = useState<string | null>(null);
+  // Nivel de la última respuesta del bot ("ELEGIR_ESTUDIO",
+  // "ELEGIR_FOLIO", "ELEGIR_ACCION"...): se reenvía con cada mensaje
+  // para que el bot resuelva un número solo contra la última lista
+  // ofrecida en ese nivel (tras la lista de estudios, "6" es el
+  // estudio 6, no el folio 6).
+  const [nivel, setNivel] = useState<string | null>(null);
   // Respuestas sugeridas que devuelve el bot para el estado actual.
   const [opciones, setOpciones] = useState<string[]>([]);
   const finRef = useRef<HTMLDivElement>(null);
@@ -55,6 +61,7 @@ export default function WhatsappPage() {
     if (pideOlvidarCurp) {
       setIdentificador('');
       setFolioActivo(null);
+      setNivel(null);
       setTramite(null);
       setTramites([]);
       setOpciones([]);
@@ -62,11 +69,12 @@ export default function WhatsappPage() {
       setIdentificador(curpEnMensaje);
     }
     try {
-      const res = await enviarWhatsapp(curpAEnviar, limpio, sinFolio || pideOlvidarCurp ? undefined : folioActivo ?? undefined);
+      const res = await enviarWhatsapp(curpAEnviar, limpio, sinFolio || pideOlvidarCurp ? undefined : folioActivo ?? undefined, nivel ?? undefined);
       if (res.olvidarCurp) {
         // El bot olvidó la CURP: limpiar el estado del front.
         setIdentificador('');
         setFolioActivo(null);
+        setNivel(null);
         setTramite(null);
         setTramites([]);
         setOpciones([]);
@@ -94,6 +102,11 @@ export default function WhatsappPage() {
       }
       setTramites(res.tramites ?? []);
       setOpciones(res.opciones ?? []);
+      // Nivel de esta respuesta: se reenvía en el siguiente mensaje
+      // para resolver un número solo contra la lista ofrecida. Sin
+      // nivel (respuesta con folio en contexto) se limpia: ahí manda
+      // el estado del trámite, no la última lista.
+      setNivel(res.nivel ?? null);
       setMensajes((prev) => [...prev, { id: idBase + 1, de: 'bot', texto: res.respuesta, entendido: res.entendido }]);
     } catch {
       setMensajes((prev) => [

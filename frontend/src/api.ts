@@ -1009,6 +1009,10 @@ export async function enviarWhatsapp(
   mensaje: string,
   /** Folio en contexto: el trámite que el usuario venía siguiendo. El backend lo prefiere para no adivinar entre varios folios. */
   folio?: string,
+  /** Nivel de la última respuesta del bot ("ELEGIR_ESTUDIO", "ELEGIR_FOLIO", "ELEGIR_ACCION"...): el
+   * backend resuelve la selección por número contra la última lista ofrecida en ese nivel (tras la
+   * lista de estudios, "6" es el estudio 6, no el folio 6). */
+  nivel?: string,
 ): Promise<{
   respuesta: string;
   tramite: Tramite | null;
@@ -1025,6 +1029,8 @@ export async function enviarWhatsapp(
    * en contexto para que la siguiente respuesta no se lea contra el
    * folio anterior (captura Eduardo, 2026-11-24). */
   limpiarFolio?: boolean;
+  /** Nivel de esta respuesta (la última lista ofrecida): el front lo guarda y lo reenvía en el siguiente mensaje. */
+  nivel?: string;
 }> {
   // Backend: POST /api/canales/whatsapp/mensaje (no /api/whatsapp/mensaje).
   // Devuelve { mensaje, respuesta, tramite, estado, siguientePaso, opciones, entendido } y,
@@ -1037,6 +1043,7 @@ export async function enviarWhatsapp(
       ...(curp.trim() ? { curp: normalizarCurp(curp) } : {}),
       mensaje,
       ...(folio ? { folio } : {}),
+      ...(nivel ? { nivel } : {}),
     }),
   });
   const tramiteRaw = raw.tramite as Record<string, unknown> | null | undefined;
@@ -1050,6 +1057,7 @@ export async function enviarWhatsapp(
     curp: typeof raw.curp === 'string' && raw.curp ? raw.curp : undefined,
     olvidarCurp: raw.olvidarCurp === true ? true : undefined,
     limpiarFolio: raw.limpiarFolio === true ? true : undefined,
+    nivel: typeof raw.nivel === 'string' && raw.nivel ? raw.nivel : undefined,
   };
 }
 

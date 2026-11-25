@@ -172,8 +172,60 @@ export default function AppPage() {
   function retomarEnPanel(t: Tramite) {
     setTramite(t);
     setClinicaId('');
+    // Sin estudio pre-seleccionado: si el folio aún no tiene estudio,
+    // el panel muestra el selector para cotizarlo (no el placeholder).
+    setEstudioId('');
     fijarFechaISO('');
     setHora('');
+  }
+
+  // Etiqueta del botón "Continuar" de cada cita activa, según lo que
+  // le falta (CONFIRMADO no lleva botón: ya solo falta asistir).
+  function etiquetaContinuar(t: Tramite): string {
+    switch (t.estado) {
+      case 'INICIADO':
+      case 'DATOS_PENDIENTES':
+        return 'Continuar: elegir estudio';
+      case 'COTIZADO':
+        return 'Continuar: elegir clínica';
+      case 'CLINICA_SELECCIONADA':
+        return 'Continuar: confirmar fecha y hora';
+      default:
+        return 'Continuar';
+    }
+  }
+
+  // "Continuar" de una cita activa: abre el panel de reservación con
+  // ese folio para terminar el proceso en ese mismo lugar (elegir
+  // estudio, clínica o fecha/hora, según lo que falte). La confirmación
+  // se registra con canal APP (ver handleConfirmar/handleClinica) y el
+  // seguimiento queda en el Journey.
+  async function continuarCita(t: Tramite) {
+    await abrirNuevaCita();
+    retomarEnPanel(t);
+    setMensaje(`Continuando tu folio ${t.folio}. ${siguientePaso(t)}.`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Cotizar el estudio de un folio que aún no tiene (INICIADO /
+  // DATOS_PENDIENTES): no se crea otro folio, se cotiza este mismo.
+  async function handleCotizarExistente() {
+    if (!tramite || !estudioId) return;
+    setReservando(true);
+    try {
+      const cotizado = await cotizar(tramite.id, estudioId, 'APP');
+      setTramite(cotizado);
+      setMensaje(`Cotización lista. Folio ${cotizado.folio}.`);
+      await recargarFolios();
+    } catch (err) {
+      setMensaje(
+        isApiError(err)
+          ? err.message
+          : 'No se pudo cotizar: el backend no respondió y no se guardó nada.',
+      );
+    } finally {
+      setReservando(false);
+    }
   }
 
   async function handleReservar(e: React.FormEvent) {
@@ -413,11 +465,45 @@ export default function AppPage() {
                         Folio: <strong>{tramite.folio}</strong>{' '}
                         <EstadoBadge estado={tramite.estado} clinica={tramite.clinica?.nombre} />
                       </p>
-                      <p>
-                        Estudio: {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
-                      </p>
+                      {tramite.estudioId ? (
+                        <p>
+                          Estudio: {tramite.estudio.nombre} — <strong>${tramite.precioCotizado}</strong>
+                        </p>
+                      ) : (
+                        <>
+                          <p>Este folio aún no tiene estudio.</p>
+                          <div className="form">
+                            <label>
+                              Estudio
+                              <select value={estudioId} onChange={(e) => setEstudioId(e.target.value)}>
+                                <option value="">Selecciona un estudio</option>
+                                {estudios.map((est) => (
+                                  <option key={est.id} value={est.id}>
+                                    {est.nombre} — ${est.precio}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            {estudioSeleccionado && (
+                              <p className="precio">
+                                Precio: <strong>${estudioSeleccionado.precio}</strong>
+                              </p>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              onClick={() => void handleCotizarExistente()}
+                              disabled={!estudioId || reservando}
+                            >
+                              {reservando ? 'Cotizando…' : 'Cotizar'}
+                            </button>
+                          </div>
+                        </>
+                      )}
 
-                      <h3>Elige clínica</h3>
+                      {tramite.estudioId && (
+                        <>
+                          <h3>Elige clínica</h3>
                       <div className="form">
                         <select value={clinicaEfectivaId} onChange={(e) => setClinicaId(e.target.value)}>
                           <option value="">Selecciona una clínica</option>
@@ -474,6 +560,8 @@ export default function AppPage() {
                           </div>
                         </>
                       )}
+                        </>
+                      )}
 
                       {tramite.estado === 'CONFIRMADO' && tramite.fechaCita && (
                         <p>
@@ -516,6 +604,11 @@ export default function AppPage() {
                         <p>Fecha: {t.fechaCita ? formatearFechaHora(t.fechaCita) : 'Por confirmar'}</p>
                         <p className="muted">{siguientePaso(t)}</p>
                         <div className="actions">
+                          {t.estado !== 'CONFIRMADO' && (
+                            <button type="button" className="btn btn-primary" onClick={() => void continuarCita(t)}>
+                              {etiquetaContinuar(t)}
+                            </button>
+                          )}
                           <Link className="btn btn-secondary" to={`/journey/${encodeURIComponent(t.folio)}`}>
                             Ver mi Journey
                           </Link>
